@@ -25,7 +25,7 @@ Baud: 921600, 8N1
 The `robstride` Rust crate's `CH341Transport` handles this protocol natively.
 
 ## Software Architecture (Rust)
-**Migrated from Python to Rust** for performance, safety, and skill development.
+**Written in Rust** for performance, safety, and skill development.
 
 ```
 src/
@@ -50,9 +50,6 @@ tests/                 Integration tests (hardware-in-the-loop)
 
 ### Patched robstride crate (IMPORTANT)
 The upstream `robstride` crate (crates.io) has a hard dependency on `socketcan` which only compiles on Linux. This project maintains a local patched copy at `robstride-local/` with socketcan behind an optional feature flag. The `actuator` module is also made `pub` for access to `TypedFeedbackData` and `TypedCommandData`. Additional patch: removed the broken RunMode special-case in `WriteCommand::to_command` and `ReadCommand::data_as_f32` (upstream encoded RunMode as raw u8 bytes instead of f32, causing silent write failures). If upgrading the robstride crate, re-apply these patches.
-
-### Legacy Python (archived)
-The original Python implementation lives in `hw/` and `arm/` for reference. It used `python-can`, `pyserial`, and the `robstride` pip package. These files are no longer actively developed.
 
 ## Motor Control — MIT-Style (CRITICAL)
 The RS03 firmware on our motors does **NOT** accept parameter-write-based RunMode changes (comm_type 0x12, param 0x7005). Writes to RunMode are silently rejected regardless of encoding (u8, f32) or motor state (enabled/disabled). All other parameter writes (gains, limits, references) work fine, but without RunMode the parameter-based control modes (position/speed/torque via Ref/SpdRef/IqRef) are inoperable.

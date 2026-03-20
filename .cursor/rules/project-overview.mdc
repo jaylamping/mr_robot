@@ -37,7 +37,7 @@ alwaysApply: true
 - RS03 default CAN ID is 127 (not 1)
 - Host CAN ID is 0xAA
 - MotorStudio must be closed before the program can use COM5
-- Migrated from Python to Rust (March 2026) for performance, safety, and skill development
+- Written in Rust for performance, safety, and skill development
 - The `robstride` Rust crate handles CH341 AT protocol and RS03 message construction natively
 - **MIT-style control only** — RS03 firmware rejects RunMode parameter writes; use ControlCommand frames (comm_type 1) with kp/kd/position/velocity/torque packed in a single frame
 - CAN2USB debugger DIP switch must be in position **2**

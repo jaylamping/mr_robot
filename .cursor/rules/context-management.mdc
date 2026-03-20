@@ -44,7 +44,7 @@ Auto-push is ONLY allowed for context files (`.cursor/rules/`, `CLAUDE.md`, `AGE
 ## Rule Scoping
 
 - `alwaysApply: true` — project-wide facts, hardware stack, key decisions
-- `globs: hw/**/*.py` — CAN protocol, motor driver details
-- `globs: arm/**/*.py` — arm joint layout, motion safety
+- `globs: src/motor.rs` — CAN protocol, motor driver details
+- `globs: src/arm.rs` — arm joint layout, motion safety
 - `globs: config/**` — config conventions
 - Create new scoped rules as new body parts come online (legs, head, etc.)
