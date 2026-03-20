@@ -71,6 +71,7 @@ async fn handle_command(motor: &mut Motor, parts: &[&str]) -> Result<Action> {
             println!("  spdgains <kp> <ki>  Set speed Kp/Ki");
             println!("  spdlim <rad/s>  Set speed limit");
             println!("  trqlim <N·m>    Set torque limit");
+            println!("  params          Read back all key motor parameters");
             println!("  hold            Hold current position (position mode)");
             println!("  sweep <deg> <n> Sweep ±deg for n cycles at 3 rad/s");
             println!("  debug           Toggle hex frame logging");
@@ -117,6 +118,12 @@ async fn handle_command(motor: &mut Motor, parts: &[&str]) -> Result<Action> {
             println!("  Torque set to {:.2} N·m", trq);
         }
 
+        "mode" | "m" => {
+            let mode = parse_f32(parts, 1, "mode <0-3>")?;
+            motor.set_run_mode(mode as u8).await?;
+            println!("  RunMode set to {}", mode as u8);
+        }
+
         "zero" | "z" => {
             motor.set_zero().await?;
             println!("  Zero position set.");
@@ -152,6 +159,30 @@ async fn handle_command(motor: &mut Motor, parts: &[&str]) -> Result<Action> {
             let lim = lim.clamp(0.1, 30.0);
             motor.set_torque_limit(lim).await?;
             println!("  Torque limit = {:.2} N·m", lim);
+        }
+
+        "params" | "readparams" => {
+            use robstride::robstride03::RobStride03Parameter;
+            let params = [
+                ("RunMode",   RobStride03Parameter::RunMode),
+                ("Ref",       RobStride03Parameter::Ref),
+                ("LimitSpd",  RobStride03Parameter::LimitSpd),
+                ("LimitTorque", RobStride03Parameter::LimitTorque),
+                ("LimitCur",  RobStride03Parameter::LimitCur),
+                ("LocKp",     RobStride03Parameter::LocKp),
+                ("SpdKp",     RobStride03Parameter::SpdKp),
+                ("SpdKi",     RobStride03Parameter::SpdKi),
+                ("MechPos",   RobStride03Parameter::MechPos),
+                ("MechVel",   RobStride03Parameter::MechVel),
+                ("Iqf",       RobStride03Parameter::Iqf),
+                ("VBus",      RobStride03Parameter::VBus),
+            ];
+            for (name, param) in &params {
+                match motor.read_param(*param).await {
+                    Ok(val) => println!("  {:<14} = {}", name, val),
+                    Err(e) => println!("  {:<14} = ERROR: {}", name, e),
+                }
+            }
         }
 
         "hold" => {

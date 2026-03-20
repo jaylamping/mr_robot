@@ -405,16 +405,7 @@ impl CommandData for WriteCommand {
     fn to_command(&self, can_id: u8) -> Command {
         let mut data = [0u8; 8];
         data[0..=1].copy_from_slice(&self.parameter_index.to_le_bytes());
-
-        if RobStride04Parameter::from_index(self.parameter_index)
-            .unwrap_or(RobStride04Parameter::Unknown)
-            == RobStride04Parameter::RunMode
-        {
-            data[4] = self.data as u8;
-        } else {
-            let le_data = self.data.to_le_bytes();
-            data[4..=7].copy_from_slice(&le_data);
-        }
+        data[4..=7].copy_from_slice(&self.data.to_le_bytes());
         Command::new(data, can_id, self.host_id as u16, CommunicationType::Write)
     }
 }
@@ -455,17 +446,7 @@ impl CommandData for ReadCommand {
 
 impl ReadCommand {
     pub fn data_as_f32(&self) -> f32 {
-        // TODO: shortcut, fix
-        if RobStride04Parameter::from_index(self.parameter_index)
-            .unwrap_or(RobStride04Parameter::Unknown)
-            == RobStride04Parameter::RunMode
-        {
-            let data = self.data.to_le_bytes()[0];
-            return data as f32;
-        }
-        let le_data = u32::from_le(self.data);
-        let float_value = f32::from_bits(le_data);
-        float_value
+        f32::from_bits(u32::from_le(self.data))
     }
 }
 

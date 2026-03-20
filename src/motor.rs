@@ -104,11 +104,14 @@ impl Motor {
     // -- Motion --
 
     pub async fn move_to(&mut self, position_rad: f32, speed_limit: Option<f32>) -> Result<()> {
-        self.ensure_enabled().await?;
+        if self.enabled {
+            self.disable().await?;
+        }
         self.set_run_mode(1).await?;
         if let Some(limit) = speed_limit {
             self.set_speed_limit(limit).await?;
         }
+        self.enable().await?;
         self.write_param(RobStride03Parameter::Ref, position_rad).await
     }
 
@@ -117,14 +120,20 @@ impl Motor {
     }
 
     pub async fn spin(&mut self, velocity_rads: f32) -> Result<()> {
-        self.ensure_enabled().await?;
+        if self.enabled {
+            self.disable().await?;
+        }
         self.set_run_mode(2).await?;
+        self.enable().await?;
         self.write_param(RobStride03Parameter::SpdRef, velocity_rads).await
     }
 
     pub async fn set_torque(&mut self, torque_nm: f32) -> Result<()> {
-        self.ensure_enabled().await?;
+        if self.enabled {
+            self.disable().await?;
+        }
         self.set_run_mode(3).await?;
+        self.enable().await?;
         self.write_param(RobStride03Parameter::IqRef, torque_nm).await
     }
 
@@ -199,12 +208,6 @@ impl Motor {
         Ok(false)
     }
 
-    async fn ensure_enabled(&mut self) -> Result<()> {
-        if !self.enabled {
-            self.enable().await?;
-        }
-        Ok(())
-    }
 
     async fn write_param(&mut self, param: RobStride03Parameter, value: f32) -> Result<()> {
         let meta = param.metadata();

@@ -9,11 +9,11 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     actuator::{normalize_value, TypedCommandData, TypedFeedbackData},
     actuator_types::ActuatorConfiguration,
-    robstride00::{RobStride00, RobStride00Command, RobStride00Feedback, RobStride00Parameter},
-    robstride01::{RobStride01, RobStride01Command, RobStride01Feedback, RobStride01Parameter},
-    robstride02::{RobStride02, RobStride02Command, RobStride02Feedback, RobStride02Parameter},
-    robstride03::{RobStride03, RobStride03Command, RobStride03Feedback, RobStride03Parameter},
-    robstride04::{RobStride04, RobStride04Command, RobStride04Feedback, RobStride04Parameter},
+    robstride00::{RobStride00, RobStride00Command, RobStride00Feedback},
+    robstride01::{RobStride01, RobStride01Command, RobStride01Feedback},
+    robstride02::{RobStride02, RobStride02Command, RobStride02Feedback},
+    robstride03::{RobStride03, RobStride03Command, RobStride03Feedback},
+    robstride04::{RobStride04, RobStride04Command, RobStride04Feedback},
     transport::TransportType,
     Actuator, Command, ControlCommand, FeedbackFrame, Frame, Protocol, TxCommand,
 };
