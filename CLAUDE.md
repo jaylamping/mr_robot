@@ -41,11 +41,14 @@ tests/                 Integration tests (hardware-in-the-loop)
 ```
 
 ### Key Crate Dependencies
-- `robstride` (v0.3+) — RS03 CAN protocol, CH341Transport (AT serial), multi-motor Supervisor
+- `robstride` (v0.3.6, **local patch** in `robstride-local/`) — RS03 CAN protocol, CH341Transport (AT serial), multi-motor Supervisor. Patched to make `socketcan` optional (Linux-only; fails to build on Windows otherwise).
 - `tokio` — async runtime (required by robstride's async Transport trait)
 - `serde` + `serde_yaml` — typed config deserialization
 - `tracing` + `tracing-subscriber` — structured logging
 - `anyhow` — ergonomic error handling
+
+### Patched robstride crate (IMPORTANT)
+The upstream `robstride` crate (crates.io) has a hard dependency on `socketcan` which only compiles on Linux. We maintain a local patched copy at `robstride-local/` with socketcan behind an optional feature flag. The `actuator` module is also made `pub` for access to `TypedFeedbackData`. If upgrading the robstride crate, re-apply these patches.
 
 ### Legacy Python (archived)
 The original Python implementation lives in `hw/` and `arm/` for reference. It used `python-can`, `pyserial`, and the `robstride` pip package. These files are no longer actively developed.
@@ -56,6 +59,7 @@ The original Python implementation lives in `hw/` and `arm/` for reference. It u
 - MotorStudio must be CLOSED before the program can use COM5
 - The `robstride` Rust crate is **async** (tokio-based) — all transport I/O is async
 - `CH341Transport` in the Rust crate handles the CAN2USB AT-framed protocol directly
+- The robstride crate returns `eyre::Result`, our code uses `anyhow::Result` — use `.map_err()` at the boundary
 - Multiple motors on same CAN bus MUST share one transport instance
 - Always disable motors on Drop / cleanup to prevent runaway
 - Speed limit < 10 rad/s and torque limit < 30 N·m during development
