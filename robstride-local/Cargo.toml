@@ -1,0 +1,41 @@
+[package]
+edition = "2021"
+name = "robstride"
+version = "0.3.6"
+authors = [
+    "Denys Bezmenov <denys@kscale.dev>",
+    "Wesley Maa <wesley@kscale.dev>",
+    "Pawel Budzianowski <pawel@kscale.dev>",
+    "Benjamin Bolte <ben@kscale.dev>",
+]
+description = "Interface for controlling actuators built by Robstride"
+license = "MIT"
+repository = "https://github.com/kscalelabs/actuator"
+
+[features]
+default = []
+instant_command = []
+socketcan = ["dep:socketcan"]
+
+[lib]
+name = "robstride"
+path = "src/lib.rs"
+
+# Upstream binary targets removed -- we only use the library
+
+[dependencies]
+async-trait = "0.1"
+eyre = "0.6"
+futures = "0.3"
+num-derive = "0.4"
+num-traits = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+tokio-serial = "5.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dependencies.socketcan]
+version = "3.3"
+features = ["async-std"]
+optional = true

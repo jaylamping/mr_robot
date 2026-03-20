@@ -1,0 +1,34 @@
+[package]
+
+name = "robstride"
+readme = "README.md"
+description = "Interface for controlling actuators built by Robstride"
+
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[lib]
+
+name = "robstride"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+instant_command = []
+
+[dependencies]
+
+async-trait = "0.1"
+tokio = { version = "1", features = ["full"] }
+socketcan = { version = "3.3", features = ["async-std"] }
+tokio-serial = "5.4"
+eyre = "0.6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+num-traits = "0.2"
+num-derive = "0.4"

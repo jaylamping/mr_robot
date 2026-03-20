@@ -1,3 +1,11 @@
+# Rust
+/target
+
+# Upstream robstride binaries (we only use the lib)
+robstride-local/src/main.rs
+robstride-local/src/bin/
+
+# Python (legacy, archived)
 __pycache__/
 *.pyc
 *.pyo
@@ -7,5 +15,7 @@ venv/
 dist/
 build/
 .eggs/
+
+# General
 *.log
 .env
