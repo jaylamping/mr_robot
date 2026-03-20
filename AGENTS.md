@@ -22,36 +22,51 @@ Frame: 'A' 'T' [4-byte wire ID] [1-byte len] [data bytes] '\r' '\n'
 Wire ID encoding: (29-bit CAN arbitration ID << 3) | 0x04, big-endian
 Baud: 921600, 8N1
 ```
-Implemented in `hw/robstride_bus.py` as a standard `python-can` Bus.
+The `robstride` Rust crate's `CH341Transport` handles this protocol natively.
 
-## Software Architecture
+## Software Architecture (Rust)
+**Migrated from Python to Rust** for performance, safety, and skill development.
+
 ```
-hw/robstride_bus.py    python-can Bus for CAN2USB AT serial protocol
-hw/motor.py            High-level single-motor API (position, velocity, torque)
-arm/arm.py             Multi-joint arm controller (shares one bus across motors)
+src/
+  lib.rs               Top-level library re-exports
+  config.rs            serde_yaml config loader for robot.yaml
+  motor.rs             High-level single-motor API (position, velocity, torque)
+  arm.rs               Multi-joint arm controller (shared transport across motors)
+  bin/
+    probe.rs           Hardware probe / connectivity smoke test
+    wave_demo.rs       Arm wave demo (Phase 1 milestone)
 config/robot.yaml      CAN IDs, joint limits, physical parameters
-demos/                 Runnable demonstrations
-tests/                 Hardware probes & integration tests
+tests/                 Integration tests (hardware-in-the-loop)
 ```
-Third-party `robstride` pip package handles low-level CAN message construction.
+
+### Key Crate Dependencies
+- `robstride` (v0.3+) — RS03 CAN protocol, CH341Transport (AT serial), multi-motor Supervisor
+- `tokio` — async runtime (required by robstride's async Transport trait)
+- `serde` + `serde_yaml` — typed config deserialization
+- `tracing` + `tracing-subscriber` — structured logging
+- `anyhow` — ergonomic error handling
+
+### Legacy Python (archived)
+The original Python implementation lives in `hw/` and `arm/` for reference. It used `python-can`, `pyserial`, and the `robstride` pip package. These files are no longer actively developed.
 
 ## Key Facts
 - RS03 default CAN ID is **127** (not 1)
 - Host CAN ID is **0xAA**
-- MotorStudio must be CLOSED before Python can use COM5
-- `robstride.Client` motor_model param affects feedback velocity/torque scaling
-- Windows console can't print Unicode emoji — use ASCII
-- PowerShell mangles inline Python — use script files
-- Multiple motors on same CAN bus MUST share one `RobStrideBus` instance
-- Always disable motors in finally/cleanup blocks
+- MotorStudio must be CLOSED before the program can use COM5
+- The `robstride` Rust crate is **async** (tokio-based) — all transport I/O is async
+- `CH341Transport` in the Rust crate handles the CAN2USB AT-framed protocol directly
+- Multiple motors on same CAN bus MUST share one transport instance
+- Always disable motors on Drop / cleanup to prevent runaway
 - Speed limit < 10 rad/s and torque limit < 30 N·m during development
 
 ## Config
-All hardware params (CAN IDs, joint limits, COM ports) live in `config/robot.yaml`. Joint limits in radians. `null` CAN ID = not yet assigned.
+All hardware params (CAN IDs, joint limits, COM ports) live in `config/robot.yaml`. Joint limits in radians. `null` CAN ID = not yet assigned. Loaded via `serde_yaml` into typed Rust structs.
 
-## Python Environment
-- Python 3.13, Windows
-- Dependencies: python-can, pyserial, robstride, pyyaml
+## Rust Environment
+- Rust stable toolchain (MSVC target on Windows)
+- Build: `cargo build`, `cargo run --bin probe`, etc.
+- Dependencies managed via `Cargo.toml`
 
 ## Context File Maintenance
 This project keeps context in three places that MUST stay in sync:

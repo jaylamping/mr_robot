@@ -1,6 +1,6 @@
 ---
 description: Arm design and control conventions
-globs: arm/**/*.py
+globs: src/arm.rs
 alwaysApply: false
 ---
 
@@ -15,10 +15,10 @@ alwaysApply: false
 Shoulder housing has integrated L-bracket tabs that bolt to the torso 2020 extrusions via M5 + sliding T-nuts.
 
 ## Multi-Motor Bus Sharing
-All arm motors on one arm share a single CAN bus and single `RobStrideBus` instance. The `Arm` class creates one bus and passes it to each `Motor`. Each motor has a unique CAN ID.
+All arm motors on one arm share a single CAN bus and single `CH341Transport` instance. The `Arm` struct creates one transport and passes it to each `Motor`. Each motor has a unique CAN ID.
 
 ## Motion Safety
 - Always enforce joint limits from `config/robot.yaml` before sending commands
 - Speed limits should be conservative during development (< 10 rad/s)
 - Torque limits should stay well below peak (< 30 N·m) until mechanical structure is proven
-- Every motion script must disable all motors in a finally/cleanup block
+- Every binary/demo must disable all motors on Drop or in cleanup logic

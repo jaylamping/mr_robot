@@ -1,6 +1,6 @@
 ---
 description: Hardware driver conventions and CAN protocol details
-globs: hw/**/*.py
+globs: src/**/*.rs
 alwaysApply: false
 ---
 
@@ -14,7 +14,7 @@ TX/RX: 'A' 'T' [4B wire_id] [1B len] [data...] '\r' '\n'
 wire_id = (29-bit arb_id << 3) | 0x04, big-endian
 ```
 
-The `RobStrideBus` class in `robstride_bus.py` implements `can.BusABC` so it works with the `robstride` pip package's `Client` class.
+The `robstride` Rust crate's `CH341Transport` handles this protocol natively. No custom framing code needed.
 
 ## RS03 Motor Specs
 - 60 N·m peak / 20 N·m rated torque
@@ -24,10 +24,10 @@ The `RobStrideBus` class in `robstride_bus.py` implements `can.BusABC` so it wor
 - CAN 2.0B extended frames (29-bit ID), 1 Mbps
 
 ## Motor API Pattern
-`Motor` class in `motor.py` wraps `robstride.Client`. It owns-or-borrows a `RobStrideBus`. Multiple motors on the same CAN bus should share one bus instance (pass `bus=` parameter).
+`Motor` struct in `src/motor.rs` wraps the `robstride` crate's `Protocol` and `CH341Transport`. Multiple motors on the same CAN bus share one transport instance. The Rust crate's `Transport` trait is async (tokio), so motor methods are `async fn`. Use `impl Drop` for automatic disable on cleanup.
 
 ## Important Gotchas
-- Windows console can't print Unicode emoji — use ASCII in print statements
-- PowerShell escaping breaks inline Python — use script files instead
-- `robstride.Client` motor_model param affects feedback scaling (model 1 vs other)
-- Always disable motors in cleanup/finally blocks to prevent runaway
+- The `robstride` Rust crate is async — all I/O goes through tokio
+- Multiple motors MUST share one `CH341Transport` instance on the same bus
+- Always disable motors on Drop / cleanup to prevent runaway
+- MotorStudio must be CLOSED before the program can open COM5

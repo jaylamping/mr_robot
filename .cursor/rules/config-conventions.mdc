@@ -9,3 +9,5 @@ alwaysApply: false
 All hardware parameters (CAN IDs, joint limits, gear ratios, COM ports) live in `config/robot.yaml`. Code should read from config rather than hardcoding values.
 
 Joint limits are in radians. CAN IDs set to `null` mean "not yet assigned."
+
+Config is loaded via `serde_yaml` into typed Rust structs defined in `src/config.rs`.

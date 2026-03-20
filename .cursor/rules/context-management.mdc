@@ -1,5 +1,4 @@
 ---
-description: Rules for maintaining project context files across AI tools
 alwaysApply: true
 ---
 
@@ -31,12 +30,15 @@ After any session where:
 Always do all three (plus push) in the same operation. Never update one without the others.
 
 ## Auto-Push Policy
+
 Any changes to `.cursor/rules/`, `CLAUDE.md`, or `AGENTS.md` MUST be committed and pushed to origin automatically. No asking, no hesitation — just do it. The only exceptions:
+
 - An extremely large addition/removal that warrants review
 - Content that diverges significantly from the project's primary goal
-Otherwise, send it.
+  Otherwise, send it.
 
 ## Git Safety — STRICT
+
 Auto-push is ONLY allowed for context files (`.cursor/rules/`, `CLAUDE.md`, `AGENTS.md`). All other project files (code, config, tests, demos, etc.) require explicit user permission before committing or pushing to main. No exceptions. If you want to ship code, ask first or work on a branch.
 
 ## Rule Scoping
