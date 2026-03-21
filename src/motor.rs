@@ -29,12 +29,22 @@ fn clamp_cmd_to_limits(cmd: f32, joint_limits_rad: Option<(f32, f32)>) -> f32 {
     joint_limits_rad.map_or(cmd, |(lo, hi)| cmd.clamp(lo, hi))
 }
 
+/// Linear error in the encoder frame (not wrapped). Use for “at home?” and “still far?” only.
 #[inline]
-fn position_delta_to_target(pos: f32, target_rad: f32, prefer_shortest_angle: bool) -> f32 {
-    if prefer_shortest_angle {
-        shortest_angle_err(pos, target_rad)
+fn linear_error(pos_rad: f32, target_rad: f32) -> f32 {
+    target_rad - pos_rad
+}
+
+/// Step direction toward target. Shortest arc is used only when linear error is huge (`> π`) so we
+/// don’t take the long way, while small circular error can’t falsely claim “at home” on limited joints.
+#[inline]
+fn step_delta_toward_home(pos_rad: f32, target_rad: f32, prefer_shortest_angle: bool) -> f32 {
+    use std::f32::consts::PI;
+    let linear = linear_error(pos_rad, target_rad);
+    if !prefer_shortest_angle || linear.abs() <= PI {
+        linear
     } else {
-        target_rad - pos
+        shortest_angle_err(pos_rad, target_rad)
     }
 }
 
@@ -153,9 +163,10 @@ impl Motor {
         self.send_control(cmd_pos, 0.0, kp, kd, 0.0).await
     }
 
-    /// If `|current − target|` exceeds `large_error_rad`, runs optional **approach** (larger steps,
-    /// moderate gains) then **gradual** steps. When `cfg.prefer_shortest_angle`, uses the shortest
-    /// angular path (wrap to (‑π, π]); each command is clamped to `joint_limits_rad` when set.
+    /// If linear `|target − position|` exceeds `large_error_rad`, runs optional **approach** then
+    /// **gradual** steps. Settle and handoff use **linear** error so wrap‑around never pretends the
+    /// joint reached home. When `prefer_shortest_angle` and linear error `> π`, step direction uses
+    /// the shortest arc; otherwise steps follow linear error. Commands clamp to `joint_limits_rad`.
     /// On stall (high torque, low velocity): hold,
     /// **back off** for `resistance_backoff_ms`, then **continue** with `post_stall_motion_scale`
     /// applied to steps and gains for the rest of this recovery.
@@ -171,8 +182,7 @@ impl Motor {
         let large_error_rad = cfg.large_error_rad as f32;
         let pos0 = self.read_position().await?;
         let use_short = cfg.prefer_shortest_angle;
-        let err0 = position_delta_to_target(pos0, target_rad, use_short);
-        if err0.abs() <= large_error_rad {
+        if linear_error(pos0, target_rad).abs() <= large_error_rad {
             return Ok(0);
         }
 
@@ -205,11 +215,11 @@ impl Motor {
 
             while start.elapsed() < timeout && start.elapsed() < approach_limit {
                 let pos = self.read_position().await?;
-                let delta = position_delta_to_target(pos, target_rad, use_short);
-                if delta.abs() < settle_tolerance_rad {
+                let linear_mag = linear_error(pos, target_rad).abs();
+                if linear_mag < settle_tolerance_rad {
                     return Ok(stall_backoffs);
                 }
-                if delta.abs() <= handoff {
+                if linear_mag <= handoff {
                     break;
                 }
 
@@ -217,6 +227,7 @@ impl Motor {
                 let kp_a = cfg.approach_kp * motion_scale;
                 let kd_a = cfg.approach_kd * motion_scale;
 
+                let delta = step_delta_toward_home(pos, target_rad, use_short);
                 let step = delta.clamp(-a_step, a_step);
                 let cmd_pos = clamp_cmd_to_limits(pos + step, joint_limits_rad);
                 let state = self
@@ -254,12 +265,12 @@ impl Motor {
         let mut resistance_streak = 0u32;
         while start.elapsed() < timeout {
             let pos = self.read_position().await?;
-            let delta = position_delta_to_target(pos, target_rad, use_short);
-            if delta.abs() < settle_tolerance_rad {
+            if linear_error(pos, target_rad).abs() < settle_tolerance_rad {
                 return Ok(stall_backoffs);
             }
 
             let cap = max_step_rad * motion_scale;
+            let delta = step_delta_toward_home(pos, target_rad, use_short);
             let step = delta.clamp(-cap, cap);
             let cmd_pos = clamp_cmd_to_limits(pos + step, joint_limits_rad);
             let state = self
@@ -499,6 +510,19 @@ mod shortest_angle_tests {
     #[test]
     fn half_turn() {
         assert!((shortest_angle_err(0.0, PI).abs() - PI).abs() < 1e-4);
+    }
+
+    #[test]
+    fn step_delta_uses_linear_when_error_below_pi() {
+        use std::f32::consts::FRAC_PI_2;
+        let d = super::step_delta_toward_home(FRAC_PI_2, 0.0, true);
+        assert!((d - (-FRAC_PI_2)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn step_delta_uses_short_wrap_when_linear_huge() {
+        let d = super::step_delta_toward_home(6.1, 0.17, true);
+        assert!(d.abs() < 1.0, "expected short arc, got {}", d);
     }
 }
 

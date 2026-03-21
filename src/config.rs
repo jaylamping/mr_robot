@@ -173,8 +173,8 @@ pub struct StartupRecoveryConfig {
     /// (e.g. 0.5 for “half speed / torque”).
     #[serde(default = "default_post_stall_motion_scale")]
     pub post_stall_motion_scale: f64,
-    /// For revolute joints: plan motion using the shortest angular path (wrap error to (‑π, π]).
-    /// Set false for prismatic / non-periodic position semantics.
+    /// When linear `|target−pos| > π`, step direction uses the shortest arc; settle/trigger always use
+    /// linear error. Set false to always step along linear encoder error.
     #[serde(default = "default_true")]
     pub prefer_shortest_angle: bool,
 }

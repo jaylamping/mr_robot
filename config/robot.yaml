@@ -40,7 +40,7 @@ arm_left:
     #   resistance_confirm_ticks: 2
     #   resistance_backoff_ms: 1000   # (alias resistance_hold_ms)
     #   post_stall_motion_scale: 0.5
-    #   prefer_shortest_angle: true   # revolute: shortest arc; false for prismatic
+    #   prefer_shortest_angle: true   # shortest arc only if linear error > π; settle stays linear
   shoulder_roll:
     can_id: null
     actuator: rs03

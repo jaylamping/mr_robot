@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::config::{ArmConfig, StartupRecoveryConfig};
-use crate::motor::{shortest_angle_err, Motor};
+use crate::motor::Motor;
 
 /// Result of [`Arm::startup_safe_recovery`]. Non-zero `stall_backoffs` means at least one joint hit
 /// a stall/backoff cycle — higher-level motion should usually wait for human acknowledgment.
@@ -71,11 +71,8 @@ impl Arm {
             let home = params.home_rad;
             let large = r.large_error_rad as f32;
             let pos = motor.read_position().await?;
-            let err_mag = if r.prefer_shortest_angle {
-                shortest_angle_err(pos, home).abs()
-            } else {
-                (pos - home).abs()
-            };
+            // Linear only: circular “short” error must not skip recovery on a limited joint.
+            let err_mag = (pos - home).abs();
             if err_mag <= large {
                 continue;
             }
