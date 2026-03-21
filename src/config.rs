@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RobotConfig {
     pub bus: BusConfig,
     pub actuators: HashMap<String, ActuatorSpec>,
@@ -14,7 +14,7 @@ pub struct RobotConfig {
     pub torso: Option<TorsoConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct BusConfig {
     pub port: String,
     pub baud: u32,
@@ -22,7 +22,7 @@ pub struct BusConfig {
     pub host_id: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ActuatorSpec {
     pub max_torque: f64,
     pub max_speed: f64,
@@ -32,7 +32,7 @@ pub struct ActuatorSpec {
     pub voltage_nominal: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ArmConfig {
     pub shoulder_pitch: JointConfig,
     pub shoulder_roll: JointConfig,
@@ -133,7 +133,7 @@ fn default_recovery_direct_command_within_rad() -> f64 {
 /// home, then **gradual** small steps. If torque stays high while velocity is near zero (stall /
 /// contact), the joint holds, waits `resistance_backoff_ms`, then **continues** the same routine
 /// with gains and step sizes scaled by `post_stall_motion_scale`.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct StartupRecoveryConfig {
     #[serde(default = "default_startup_large_error_rad")]
     pub large_error_rad: f64,
@@ -226,7 +226,7 @@ impl Default for StartupRecoveryConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct JointConfig {
     pub can_id: Option<u8>,
     pub actuator: String,
@@ -245,7 +245,7 @@ pub struct JointConfig {
     pub startup_recovery: StartupRecoveryConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TorsoConfig {
     pub frame: String,
     pub dimensions_mm: (u32, u32, u32),

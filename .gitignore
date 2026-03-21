@@ -16,6 +16,10 @@ dist/
 build/
 .eggs/
 
+# Link frontend
+link/node_modules/
+link/dist/
+
 # General
 *.log
 .env
