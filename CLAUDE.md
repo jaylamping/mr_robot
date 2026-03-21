@@ -24,29 +24,45 @@ Baud: 921600, 8N1
 ```
 The `robstride` Rust crate's `CH341Transport` handles this protocol natively.
 
-## Software Architecture (Rust)
-**Written in Rust** for performance, safety, and skill development.
+## Software Architecture (Rust — Cargo Workspace)
+**Written in Rust** for performance, safety, and skill development. The repo is a **Cargo workspace** with two crates plus a React frontend:
 
 ```
-src/
-  lib.rs               Top-level library re-exports
-  config.rs            serde_yaml config loader for robot.yaml
-  motor.rs             High-level single-motor API (MIT-style control)
-  arm.rs               Multi-joint arm controller (shared transport across motors)
-  bin/
+Cargo.toml             Workspace root (members: cortex, link-server)
+cortex/                Motor control, arm coordination, config ("brain stem")
+  src/
+    lib.rs             Crate root (pub mod config, motor, arm)
+    config.rs          serde_yaml config loader for robot.yaml
+    motor.rs           High-level single-motor API (MIT-style control)
+    arm.rs             Multi-joint arm controller (shared transport)
+  src/bin/
     probe.rs           Hardware probe / connectivity smoke test
     motor_repl.rs      Interactive motor REPL for testing/tuning
     wave_demo.rs       Arm wave demo (Phase 1 milestone)
+  tests/
+    motor_test.rs      Integration tests (hardware-in-the-loop)
+link-server/           Web server + telemetry (axum, WebTransport)
+  src/
+    main.rs            `link` binary entry point (clap CLI)
+    lib.rs             AppState, build_router, module re-exports
+    api.rs             REST API endpoints (/api/config, /api/motors, etc.)
+    telemetry.rs       Motor polling loop + WebTransport datagram streaming
+link/                  React frontend (Vite + TanStack Router + Tailwind)
 config/robot.yaml      CAN IDs, joint limits, physical parameters
-tests/                 Integration tests (hardware-in-the-loop)
+robstride-local/       Patched robstride crate (socketcan optional)
 ```
 
 ### Key Crate Dependencies
+- `cortex` — our motor control crate (motor, arm, config). Import as `use cortex::motor::Motor` etc.
+- `link-server` — our web/telemetry crate. The `link` binary lives here.
 - `robstride` (v0.3.6, **local patch** in `robstride-local/`) — RS03 CAN protocol, CH341Transport (AT serial), multi-motor Supervisor. Patched to make `socketcan` optional (Linux-only; fails to build on Windows otherwise).
 - `tokio` — async runtime (required by robstride's async Transport trait)
 - `serde` + `serde_yaml` — typed config deserialization
 - `tracing` + `tracing-subscriber` — structured logging
 - `anyhow` — ergonomic error handling
+- `axum` + `tower-http` — HTTP server and middleware (in link-server)
+- `wtransport` — WebTransport/QUIC for real-time telemetry datagrams (in link-server)
+- `clap` — CLI argument parsing (in link-server)
 
 ### Patched robstride crate (IMPORTANT)
 The upstream `robstride` crate (crates.io) has a hard dependency on `socketcan` which only compiles on Linux. This project maintains a local patched copy at `robstride-local/` with socketcan behind an optional feature flag. The `actuator` module is also made `pub` for access to `TypedFeedbackData` and `TypedCommandData`. Additional patch: removed the broken RunMode special-case in `WriteCommand::to_command` and `ReadCommand::data_as_f32` (upstream encoded RunMode as raw u8 bytes instead of f32, causing silent write failures). If upgrading the robstride crate, re-apply these patches.
@@ -72,6 +88,7 @@ RS03 MIT control limits (from RobStride03Command normalization):
 Development defaults: kp=30, kd=1 for position hold. Start soft (kp=5, kd=0.5) when testing new configurations.
 
 ## Key Facts
+- The repo is a **Cargo workspace** — `cortex` (motor/arm/config) and `link-server` (web/telemetry). Use `cortex::` for motor imports, not `robot::`.
 - RS03 default CAN ID is **127** (not 1)
 - Host CAN ID is **0xAA**
 - MotorStudio must be CLOSED before the program can use COM5

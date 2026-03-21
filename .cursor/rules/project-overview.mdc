@@ -23,13 +23,22 @@ alwaysApply: true
 
 ## Software Stack
 - **Language:** Rust (stable toolchain, MSVC target on Windows)
-- **Key crate:** `robstride` (v0.3+) — CH341Transport for CAN2USB, RS03 protocol, async API
+- **Workspace:** Cargo workspace at repo root with two crates: `cortex` and `link-server`
+- **Key crate:** `robstride` (v0.3+, local patch at `robstride-local/`) — CH341Transport for CAN2USB, RS03 protocol, async API
 - **Runtime:** tokio (async, required by robstride Transport trait)
 - **Config:** `serde` + `serde_yaml` for `config/robot.yaml`
-- `src/motor.rs` — high-level single-motor API (MIT-style control)
-- `src/arm.rs` — multi-joint arm coordination
-- `src/config.rs` — typed config deserialization
-- `src/bin/motor_repl.rs` — interactive motor REPL for testing/tuning
+- **`cortex/`** — motor control, arm coordination, config (the "brain stem")
+  - `cortex/src/motor.rs` — high-level single-motor API (MIT-style control)
+  - `cortex/src/arm.rs` — multi-joint arm coordination
+  - `cortex/src/config.rs` — typed config deserialization
+  - `cortex/src/bin/probe.rs` — hardware probe / connectivity smoke test
+  - `cortex/src/bin/motor_repl.rs` — interactive motor REPL for testing/tuning
+  - `cortex/src/bin/wave_demo.rs` — arm wave demo (Phase 1 milestone)
+- **`link-server/`** — web server and telemetry (axum + WebTransport)
+  - `link-server/src/main.rs` — `link` binary entry point
+  - `link-server/src/api.rs` — REST API endpoints
+  - `link-server/src/telemetry.rs` — motor polling + WebTransport datagram streaming
+- **`link/`** — React frontend (Vite + TanStack Router + Tailwind)
 - Config lives in `config/robot.yaml`
 
 ## Key Decisions Already Made
