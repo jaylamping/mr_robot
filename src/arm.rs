@@ -6,19 +6,44 @@ use robstride::Protocol;
 use tokio::sync::Mutex;
 use tracing::info;
 
-use crate::config::ArmConfig;
-use crate::motor::Motor;
+use crate::config::{ArmConfig, StartupRecoveryConfig};
+use crate::motor::{shortest_angle_err, Motor};
+
+/// Result of [`Arm::startup_safe_recovery`]. Non-zero `stall_backoffs` means at least one joint hit
+/// a stall/backoff cycle — higher-level motion should usually wait for human acknowledgment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StartupRecoverySummary {
+    pub stall_backoffs: u32,
+}
+
+struct JointStartupParams {
+    home_rad: f32,
+    limit_min_rad: f32,
+    limit_max_rad: f32,
+    recovery: StartupRecoveryConfig,
+}
 
 pub struct Arm {
     motors: HashMap<String, Motor>,
+    joint_startup: HashMap<String, JointStartupParams>,
 }
 
 impl Arm {
     pub fn new(config: &ArmConfig, protocol: Arc<Mutex<Protocol>>) -> Self {
         let mut motors = HashMap::new();
+        let mut joint_startup = HashMap::new();
 
         for (name, joint) in config.joints() {
             if let Some(can_id) = joint.can_id {
+                joint_startup.insert(
+                    name.to_string(),
+                    JointStartupParams {
+                        home_rad: joint.home_rad as f32,
+                        limit_min_rad: joint.limits.0 as f32,
+                        limit_max_rad: joint.limits.1 as f32,
+                        recovery: joint.startup_recovery.clone(),
+                    },
+                );
                 motors.insert(
                     name.to_string(),
                     Motor::new(protocol.clone(), can_id),
@@ -26,7 +51,48 @@ impl Arm {
             }
         }
 
-        Self { motors }
+        Self {
+            motors,
+            joint_startup,
+        }
+    }
+
+    /// After enable, any joint farther than `startup_recovery.large_error_rad` from `home_rad`
+    /// runs recovery: optional fast approach, then gradual steps; stall detection runs in both
+    /// phases. See [`StartupRecoverySummary`] for whether any obstruction was seen.
+    pub async fn startup_safe_recovery(&mut self) -> Result<StartupRecoverySummary> {
+        let mut stall_backoffs = 0u32;
+        for (name, motor) in &mut self.motors {
+            let params = self
+                .joint_startup
+                .get(name)
+                .ok_or_else(|| anyhow::anyhow!("internal: joint '{}' has motor but no startup params", name))?;
+            let r = &params.recovery;
+            let home = params.home_rad;
+            let large = r.large_error_rad as f32;
+            let pos = motor.read_position().await?;
+            let err_mag = if r.prefer_shortest_angle {
+                shortest_angle_err(pos, home).abs()
+            } else {
+                (pos - home).abs()
+            };
+            if err_mag <= large {
+                continue;
+            }
+
+            info!(
+                joint = %name,
+                error_rad = err_mag,
+                home_rad = home,
+                "joint far from home; running startup recovery (approach + gradual)"
+            );
+
+            let limits = (params.limit_min_rad, params.limit_max_rad);
+            stall_backoffs += motor
+                .recover_position_if_far(home, r, Some(limits))
+                .await?;
+        }
+        Ok(StartupRecoverySummary { stall_backoffs })
     }
 
     pub async fn enable_all(&mut self) -> Result<()> {

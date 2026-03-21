@@ -26,6 +26,19 @@ async fn main() -> Result<()> {
     arm.enable_all().await?;
     println!("All joints enabled");
 
+    let recovery = arm.startup_safe_recovery().await?;
+    if recovery.stall_backoffs > 0 {
+        println!(
+            "Startup recovery reported {} stall/backoff event(s) (joint was held or blocked).",
+            recovery.stall_backoffs
+        );
+        println!("Skipping wave demo — re-run when the arm is clear and you intend to move.");
+        println!("Disabling all joints...");
+        arm.disable_all().await?;
+        return Ok(());
+    }
+    println!("Startup position check complete");
+
     let result = wave_sequence(&mut arm).await;
 
     println!("Disabling all joints...");

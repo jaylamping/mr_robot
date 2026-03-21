@@ -26,6 +26,21 @@ arm_left:
     can_id: 127           # TODO: assign final IDs
     actuator: rs03
     limits: [-1.57, 3.14] # -90 to 180 deg
+    # home_rad: 0.0       # optional; default 0 — used for “far from home” at startup
+    # startup_recovery:   # optional; see defaults in config.rs
+    #   approach_enabled: true
+    #   approach_max_step_rad: 0.12
+    #   approach_kp: 20.0
+    #   approach_kd: 1.0
+    #   approach_step_period_ms: 25
+    #   approach_handoff_rad: 0.28
+    #   approach_max_secs: 45.0
+    #   resistance_torque_nm: 12.0
+    #   resistance_velocity_rads: 0.15
+    #   resistance_confirm_ticks: 2
+    #   resistance_backoff_ms: 1000   # (alias resistance_hold_ms)
+    #   post_stall_motion_scale: 0.5
+    #   prefer_shortest_angle: true   # revolute: shortest arc; false for prismatic
   shoulder_roll:
     can_id: null
     actuator: rs03

@@ -10,8 +10,33 @@ use robstride::actuator::{TypedCommandData, TypedFeedbackData};
 use robstride::robstride03::{RobStride03Command, RobStride03Feedback, RobStride03Parameter};
 use robstride::ActuatorParameter;
 use tokio::sync::Mutex;
+use tracing::info;
+
+use crate::config::StartupRecoveryConfig;
 
 const HOST_ID: u8 = 0xAA;
+
+/// Signed smallest angle from `from_rad` to `to_rad`, in (‑π, π]: move along the shorter arc on a circle.
+#[inline]
+pub fn shortest_angle_err(from_rad: f32, to_rad: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    let d = to_rad - from_rad;
+    (d + PI).rem_euclid(TAU) - PI
+}
+
+#[inline]
+fn clamp_cmd_to_limits(cmd: f32, joint_limits_rad: Option<(f32, f32)>) -> f32 {
+    joint_limits_rad.map_or(cmd, |(lo, hi)| cmd.clamp(lo, hi))
+}
+
+#[inline]
+fn position_delta_to_target(pos: f32, target_rad: f32, prefer_shortest_angle: bool) -> f32 {
+    if prefer_shortest_angle {
+        shortest_angle_err(pos, target_rad)
+    } else {
+        target_rad - pos
+    }
+}
 
 pub struct MotorState {
     pub angle_rad: f32,
@@ -110,6 +135,174 @@ impl Motor {
             kd.unwrap_or(1.0),
             0.0,
         ).await
+    }
+
+    /// One impedance step toward `target_rad` without jumping more than `max_step_rad` from
+    /// `from_rad` (commanded intermediate goal).
+    pub async fn step_toward(
+        &mut self,
+        target_rad: f32,
+        from_rad: f32,
+        max_step_rad: f32,
+        kp: f32,
+        kd: f32,
+    ) -> Result<MotorState> {
+        let err = target_rad - from_rad;
+        let step = err.clamp(-max_step_rad, max_step_rad);
+        let cmd_pos = from_rad + step;
+        self.send_control(cmd_pos, 0.0, kp, kd, 0.0).await
+    }
+
+    /// If `|current − target|` exceeds `large_error_rad`, runs optional **approach** (larger steps,
+    /// moderate gains) then **gradual** steps. When `cfg.prefer_shortest_angle`, uses the shortest
+    /// angular path (wrap to (‑π, π]); each command is clamped to `joint_limits_rad` when set.
+    /// On stall (high torque, low velocity): hold,
+    /// **back off** for `resistance_backoff_ms`, then **continue** with `post_stall_motion_scale`
+    /// applied to steps and gains for the rest of this recovery.
+    ///
+    /// Returns how many stall/backoff cycles ran (0 = no obstruction detected). Callers can use
+    /// this to avoid auto-resuming higher-level motion after a human fought the joint.
+    pub async fn recover_position_if_far(
+        &mut self,
+        target_rad: f32,
+        cfg: &StartupRecoveryConfig,
+        joint_limits_rad: Option<(f32, f32)>,
+    ) -> Result<u32> {
+        let large_error_rad = cfg.large_error_rad as f32;
+        let pos0 = self.read_position().await?;
+        let use_short = cfg.prefer_shortest_angle;
+        let err0 = position_delta_to_target(pos0, target_rad, use_short);
+        if err0.abs() <= large_error_rad {
+            return Ok(0);
+        }
+
+        let settle_tolerance_rad = cfg.settle_tolerance_rad as f32;
+        let max_step_rad = cfg.max_step_rad as f32;
+        let kp_soft = cfg.kp_soft;
+        let kd_soft = cfg.kd_soft;
+        let step_period = Duration::from_millis(cfg.step_period_ms);
+        let timeout = Duration::from_secs_f64(cfg.recovery_timeout_secs);
+
+        let post_scale = (cfg.post_stall_motion_scale as f32).clamp(0.05, 1.0);
+
+        let trip_tau = cfg.resistance_torque_nm;
+        let trip_vel = cfg.resistance_velocity_rads;
+        let confirm = cfg.resistance_confirm_ticks.max(1);
+        let backoff = Duration::from_millis(cfg.resistance_backoff_ms);
+
+        let start = Instant::now();
+        let approach_limit = Duration::from_secs_f64(cfg.approach_max_secs);
+
+        let mut motion_scale = 1.0f32;
+        let mut stall_backoffs = 0u32;
+
+        if cfg.approach_enabled {
+            let handoff = cfg.approach_handoff_rad as f32;
+            let a_step_base = cfg.approach_max_step_rad as f32;
+            let a_period = Duration::from_millis(cfg.approach_step_period_ms);
+
+            let mut resistance_streak = 0u32;
+
+            while start.elapsed() < timeout && start.elapsed() < approach_limit {
+                let pos = self.read_position().await?;
+                let delta = position_delta_to_target(pos, target_rad, use_short);
+                if delta.abs() < settle_tolerance_rad {
+                    return Ok(stall_backoffs);
+                }
+                if delta.abs() <= handoff {
+                    break;
+                }
+
+                let a_step = a_step_base * motion_scale;
+                let kp_a = cfg.approach_kp * motion_scale;
+                let kd_a = cfg.approach_kd * motion_scale;
+
+                let step = delta.clamp(-a_step, a_step);
+                let cmd_pos = clamp_cmd_to_limits(pos + step, joint_limits_rad);
+                let state = self
+                    .send_control(cmd_pos, 0.0, kp_a, kd_a, 0.0)
+                    .await?;
+
+                let looks_blocked =
+                    state.torque_nm.abs() >= trip_tau && state.velocity_rads.abs() <= trip_vel;
+                if looks_blocked {
+                    resistance_streak += 1;
+                    if resistance_streak >= confirm {
+                        stall_backoffs += 1;
+                        info!(
+                            torque_nm = state.torque_nm,
+                            velocity_rads = state.velocity_rads,
+                            backoff_ms = cfg.resistance_backoff_ms,
+                            scale = post_scale,
+                            "startup recovery: stall; holding, backing off, then continuing scaled down"
+                        );
+                        let hold_pos = self.read_position().await?;
+                        self.send_control(hold_pos, 0.0, kp_soft * motion_scale, kd_soft * motion_scale, 0.0)
+                            .await?;
+                        tokio::time::sleep(backoff).await;
+                        motion_scale = post_scale;
+                        resistance_streak = 0;
+                    }
+                } else {
+                    resistance_streak = 0;
+                }
+
+                tokio::time::sleep(a_period).await;
+            }
+        }
+
+        let mut resistance_streak = 0u32;
+        while start.elapsed() < timeout {
+            let pos = self.read_position().await?;
+            let delta = position_delta_to_target(pos, target_rad, use_short);
+            if delta.abs() < settle_tolerance_rad {
+                return Ok(stall_backoffs);
+            }
+
+            let cap = max_step_rad * motion_scale;
+            let step = delta.clamp(-cap, cap);
+            let cmd_pos = clamp_cmd_to_limits(pos + step, joint_limits_rad);
+            let state = self
+                .send_control(
+                    cmd_pos,
+                    0.0,
+                    kp_soft * motion_scale,
+                    kd_soft * motion_scale,
+                    0.0,
+                )
+                .await?;
+
+            let looks_blocked =
+                state.torque_nm.abs() >= trip_tau && state.velocity_rads.abs() <= trip_vel;
+            if looks_blocked {
+                resistance_streak += 1;
+                if resistance_streak >= confirm {
+                    stall_backoffs += 1;
+                    info!(
+                        phase = "gradual",
+                        torque_nm = state.torque_nm,
+                        velocity_rads = state.velocity_rads,
+                        backoff_ms = cfg.resistance_backoff_ms,
+                        "startup recovery: stall during gradual; holding and backing off"
+                    );
+                    let hold_pos = self.read_position().await?;
+                    self.send_control(hold_pos, 0.0, kp_soft * motion_scale, kd_soft * motion_scale, 0.0)
+                        .await?;
+                    tokio::time::sleep(backoff).await;
+                    resistance_streak = 0;
+                }
+            } else {
+                resistance_streak = 0;
+            }
+
+            tokio::time::sleep(step_period).await;
+        }
+
+        anyhow::bail!(
+            "startup recovery timed out: target {:.3} rad, last read {:.3} rad",
+            target_rad,
+            self.read_position().await?
+        );
     }
 
     pub async fn move_to_deg(&mut self, degrees: f32, kp: Option<f32>, kd: Option<f32>) -> Result<MotorState> {
@@ -278,6 +471,34 @@ impl Motor {
             mode: fb.mode,
             faults,
         }
+    }
+}
+
+#[cfg(test)]
+mod shortest_angle_tests {
+    use super::shortest_angle_err;
+    use std::f32::consts::PI;
+
+    #[test]
+    fn small_delta_unchanged() {
+        assert!((shortest_angle_err(0.5, 1.0) - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn near_two_pi_wraps_small_positive() {
+        let d = shortest_angle_err(6.1, 0.17);
+        assert!(d > 0.0 && d < 1.0, "d={}", d);
+    }
+
+    #[test]
+    fn near_zero_wraps_small_negative() {
+        let d = shortest_angle_err(0.17, 6.1);
+        assert!(d < 0.0 && d.abs() < 1.0, "d={}", d);
+    }
+
+    #[test]
+    fn half_turn() {
+        assert!((shortest_angle_err(0.0, PI).abs() - PI).abs() < 1e-4);
     }
 }
 
