@@ -8,10 +8,10 @@ use tokio::sync::{broadcast, Mutex};
 use tracing::info;
 use wtransport::Identity;
 
-use robot::config::RobotConfig;
-use robot::motor::{create_ch341_protocol, Motor};
-use robot::server::telemetry::{self, TelemetrySnapshot};
-use robot::server::{self, AppState};
+use cortex::config::RobotConfig;
+use cortex::motor::{create_ch341_protocol, Motor};
+use link_server::telemetry::{self, TelemetrySnapshot};
+use link_server::{self, AppState};
 
 #[derive(Parser)]
 #[command(
@@ -88,7 +88,6 @@ async fn main() -> Result<()> {
         wt_port: cli.wt_port,
     });
 
-    // Spawn telemetry polling loop
     let telem_state = state.clone();
     let mock = cli.no_hardware;
     let hz = cli.telemetry_hz;
@@ -96,15 +95,13 @@ async fn main() -> Result<()> {
         telemetry::telemetry_loop(telem_state, hz, mock).await;
     });
 
-    // Spawn WebTransport server (reuse same identity for matching cert hash)
     let wt_state = state.clone();
     let wt_port = cli.wt_port;
     tokio::spawn(async move {
         telemetry::webtransport_server(wt_state, wt_port, identity).await;
     });
 
-    // Start HTTP server
-    let app = server::build_router(state.clone());
+    let app = link_server::build_router(state.clone());
     let addr = format!("0.0.0.0:{}", cli.port);
     info!("Link HTTP server starting on http://{}", addr);
     info!("Link WebTransport server on port {}", cli.wt_port);

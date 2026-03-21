@@ -2,8 +2,8 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use anyhow::Result;
-use robot::config::RobotConfig;
-use robot::motor::{create_ch341_protocol, Motor};
+use cortex::config::RobotConfig;
+use cortex::motor::{create_ch341_protocol, Motor};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -217,7 +217,7 @@ async fn handle_command(motor: &mut Motor, parts: &[&str]) -> Result<Action> {
     Ok(Action::Continue)
 }
 
-fn print_state(state: &robot::motor::MotorState) {
+fn print_state(state: &cortex::motor::MotorState) {
     println!("  Position:    {:.3} rad  ({:.1}°)", state.angle_rad, state.angle_rad.to_degrees());
     println!("  Velocity:    {:.3} rad/s", state.velocity_rads);
     println!("  Torque:      {:.3} N·m", state.torque_nm);

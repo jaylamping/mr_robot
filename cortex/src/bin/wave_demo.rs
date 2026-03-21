@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use robot::config::RobotConfig;
-use robot::motor::create_ch341_protocol;
-use robot::arm::Arm;
+use cortex::config::RobotConfig;
+use cortex::motor::create_ch341_protocol;
+use cortex::arm::Arm;
 
 #[tokio::main]
 async fn main() -> Result<()> {

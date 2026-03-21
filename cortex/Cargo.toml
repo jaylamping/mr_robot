@@ -1,0 +1,26 @@
+[package]
+name = "cortex"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+robstride = { path = "../robstride-local" }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1"
+
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
+
+[[bin]]
+name = "wave_demo"
+path = "src/bin/wave_demo.rs"
+
+[[bin]]
+name = "motor_repl"
+path = "src/bin/motor_repl.rs"

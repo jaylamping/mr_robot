@@ -1,6 +1,6 @@
 use anyhow::Result;
-use robot::config::RobotConfig;
-use robot::motor::{create_ch341_protocol, Motor};
+use cortex::config::RobotConfig;
+use cortex::motor::{create_ch341_protocol, Motor};
 
 #[tokio::main]
 async fn main() -> Result<()> {

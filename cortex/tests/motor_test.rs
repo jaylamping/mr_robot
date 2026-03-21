@@ -2,8 +2,8 @@
 //! Requires hardware: RS03 motor on CAN ID 127, CAN2USB on COM5.
 //! Run with: cargo test --test motor_test -- --nocapture
 
-use robot::config::RobotConfig;
-use robot::motor::{create_ch341_protocol, Motor};
+use cortex::config::RobotConfig;
+use cortex::motor::{create_ch341_protocol, Motor};
 
 #[tokio::test]
 async fn smoke_test_motor_api() {

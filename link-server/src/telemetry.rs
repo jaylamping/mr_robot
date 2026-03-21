@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tracing::{debug, info, warn};
 
-use super::AppState;
+use crate::AppState;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MotorSnapshot {
@@ -190,7 +190,7 @@ async fn build_live_snapshot(state: &AppState, timestamp_ms: u64) -> TelemetrySn
 pub fn build_joint_name_map(state: &AppState) -> HashMap<u8, String> {
     let mut map = HashMap::new();
 
-    let arms: Vec<(&str, &crate::config::ArmConfig)> = [
+    let arms: Vec<(&str, &cortex::config::ArmConfig)> = [
         ("left", state.config.arm_left.as_ref()),
         ("right", state.config.arm_right.as_ref()),
     ]

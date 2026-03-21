@@ -9,10 +9,10 @@ use tokio::sync::{broadcast, Mutex};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
-use crate::config::RobotConfig;
-use crate::motor::Motor;
+use cortex::config::RobotConfig;
+use cortex::motor::Motor;
 
-use self::telemetry::TelemetrySnapshot;
+use crate::telemetry::TelemetrySnapshot;
 
 pub struct AppState {
     pub config: RobotConfig,

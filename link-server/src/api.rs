@@ -7,8 +7,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use super::AppState;
-use super::telemetry::build_joint_name_map;
+use crate::AppState;
+use crate::telemetry::build_joint_name_map;
 
 #[derive(Serialize)]
 struct MotorInfo {
@@ -115,7 +115,6 @@ async fn get_motors(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         });
     }
 
-    // Also include configured-but-not-instantiated motors (no hardware mode)
     collect_configured_motors(&state, &motors, &joint_map, &mut infos);
 
     infos.sort_by_key(|m| m.can_id);
@@ -315,7 +314,7 @@ fn find_joint_config(state: &AppState, can_id: u8) -> (String, (f64, f64)) {
 
 fn collect_configured_motors(
     state: &AppState,
-    motors: &std::collections::HashMap<u8, crate::motor::Motor>,
+    motors: &std::collections::HashMap<u8, cortex::motor::Motor>,
     joint_map: &std::collections::HashMap<u8, String>,
     infos: &mut Vec<MotorInfo>,
 ) {
