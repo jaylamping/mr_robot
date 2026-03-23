@@ -28,8 +28,8 @@ Real-time motor telemetry, arm coordination, and direct actuator control — ser
 | <img src="https://cdn.simpleicons.org/tailwindcss/06B6D4" width="16" /> | **Tailwind CSS 4** | Utility-first styling (Vite plugin, no config file) |
 | <img src="https://cdn.simpleicons.org/reactrouter/CA4245" width="16" /> | **TanStack Router** | File-based routing with auto code-splitting |
 | <img src="https://cdn.simpleicons.org/shadcnui/000000" width="16" /> | **shadcn/ui** | Component primitives (Base Nova style) |
-| <img src="https://cdn.simpleicons.org/zustand/000000" width="16" /> | **Zustand** | Lightweight state management |
-| <img src="https://cdn.simpleicons.org/recharts/22B5BF" width="16" /> | **Recharts** | Time-series telemetry charts |
+| 🐻 | **Zustand** | Lightweight state management |
+| 📊 | **Recharts** | Time-series telemetry charts |
 | <img src="https://cdn.simpleicons.org/lucide/F56565" width="16" /> | **Lucide** | Icons |
 | <img src="https://cdn.simpleicons.org/nodedotjs/5FA04E" width="16" /> | **Node v24** | Runtime (see `.nvmrc`) |
 
