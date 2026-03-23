@@ -12,6 +12,7 @@ Real-time motor telemetry, arm coordination, and direct actuator control — ser
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4.svg?style=flat&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 [![TanStack Router](https://img.shields.io/badge/TanStack_Router-1.x-FF4154.svg?style=flat&logo=reactrouter&logoColor=white)](https://tanstack.com/router)
 [![shadcn/ui](https://img.shields.io/badge/shadcn/ui-latest-000000.svg?style=flat&logo=shadcnui&logoColor=white)](https://ui.shadcn.com/)
+[![react-icons](https://img.shields.io/badge/react--icons-5.x-E91E63.svg?style=flat&logo=react&logoColor=white)](https://react-icons.github.io/react-icons/)
 [![Node](https://img.shields.io/badge/Node-24-5FA04E.svg?style=flat&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 
 </div>
@@ -28,9 +29,9 @@ Real-time motor telemetry, arm coordination, and direct actuator control — ser
 | <img src="https://cdn.simpleicons.org/tailwindcss/06B6D4" width="16" /> | **Tailwind CSS 4**  | Utility-first styling (Vite plugin, no config file) |
 | <img src="https://cdn.simpleicons.org/reactrouter/CA4245" width="16" /> | **TanStack Router** | File-based routing with auto code-splitting         |
 | <img src="https://cdn.simpleicons.org/shadcnui/000000" width="16" />    | **shadcn/ui**       | Component primitives (Base Nova style)              |
-| 🐻                                                                      | **Zustand**         | Lightweight state management                        |
-| 📊                                                                      | **Recharts**        | Time-series telemetry charts                        |
-| <img src="https://cdn.simpleicons.org/lucide/F56565" width="16" />      | **Lucide**          | Icons                                               |
+| <img src="https://raw.githubusercontent.com/pmndrs/zustand/main/bear.jpg" width="16" /> | **Zustand** | Lightweight state management |
+| <img src="https://avatars.githubusercontent.com/u/24030498?s=16" width="16" /> | **Recharts** | Time-series telemetry charts |
+| <img src="https://raw.githubusercontent.com/react-icons/react-icons/master/react-icons.svg" width="16" /> | **react-icons** | Icons (Lucide, Font Awesome, Material, and more) |
 | <img src="https://cdn.simpleicons.org/nodedotjs/5FA04E" width="16" />   | **Node v24**        | Runtime (see `.nvmrc`)                              |
 
 ## Getting Started
