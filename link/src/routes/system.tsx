@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { ServerIcon, RadioIcon, CpuIcon, ThermometerIcon } from 'lucide-react'
+import { LuServer, LuRadio, LuCpu, LuThermometer } from 'react-icons/lu'
 
 export const Route = createFileRoute('/system')({
   component: SystemPage,
@@ -55,23 +55,23 @@ function SystemPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
         <StatusCard
-          icon={<ServerIcon className="size-4" />}
+          icon={<LuServer className="size-4" />}
           label="Uptime"
           value={status ? formatUptime(status.uptime_secs) : '—'}
         />
         <StatusCard
-          icon={<CpuIcon className="size-4" />}
+          icon={<LuCpu className="size-4" />}
           label="Mode"
           value={status?.mode ?? '—'}
           badge={status?.mode === 'hardware' ? 'default' : 'secondary'}
         />
         <StatusCard
-          icon={<RadioIcon className="size-4" />}
+          icon={<LuRadio className="size-4" />}
           label="Transport"
           value={status?.transport_type ?? '—'}
         />
         <StatusCard
-          icon={<ThermometerIcon className="size-4" />}
+          icon={<LuThermometer className="size-4" />}
           label="Telemetry"
           value={connected ? 'Connected' : 'Disconnected'}
           badge={connected ? 'default' : 'destructive'}

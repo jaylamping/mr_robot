@@ -20,18 +20,18 @@ Real-time motor telemetry, arm coordination, and direct actuator control — ser
 
 ## Stack
 
-| | Technology | Description |
-|---|---|---|
-| <img src="https://cdn.simpleicons.org/react/61DAFB" width="16" /> | **React 19** | UI framework |
-| <img src="https://cdn.simpleicons.org/typescript/3178C6" width="16" /> | **TypeScript 5.9** | Type-safe JavaScript |
-| <img src="https://cdn.simpleicons.org/vite/646CFF" width="16" /> | **Vite 8** | Build tooling and dev server |
-| <img src="https://cdn.simpleicons.org/tailwindcss/06B6D4" width="16" /> | **Tailwind CSS 4** | Utility-first styling (Vite plugin, no config file) |
-| <img src="https://cdn.simpleicons.org/reactrouter/CA4245" width="16" /> | **TanStack Router** | File-based routing with auto code-splitting |
-| <img src="https://cdn.simpleicons.org/shadcnui/000000" width="16" /> | **shadcn/ui** | Component primitives (Base Nova style) |
-| 🐻 | **Zustand** | Lightweight state management |
-| 📊 | **Recharts** | Time-series telemetry charts |
-| <img src="https://cdn.simpleicons.org/lucide/F56565" width="16" /> | **Lucide** | Icons |
-| <img src="https://cdn.simpleicons.org/nodedotjs/5FA04E" width="16" /> | **Node v24** | Runtime (see `.nvmrc`) |
+|                                                                         | Technology          | Description                                         |
+| ----------------------------------------------------------------------- | ------------------- | --------------------------------------------------- |
+| <img src="https://cdn.simpleicons.org/react/61DAFB" width="16" />       | **React 19**        | UI framework                                        |
+| <img src="https://cdn.simpleicons.org/typescript/3178C6" width="16" />  | **TypeScript 5.9**  | Type-safe JavaScript                                |
+| <img src="https://cdn.simpleicons.org/vite/646CFF" width="16" />        | **Vite 8**          | Build tooling and dev server                        |
+| <img src="https://cdn.simpleicons.org/tailwindcss/06B6D4" width="16" /> | **Tailwind CSS 4**  | Utility-first styling (Vite plugin, no config file) |
+| <img src="https://cdn.simpleicons.org/reactrouter/CA4245" width="16" /> | **TanStack Router** | File-based routing with auto code-splitting         |
+| <img src="https://cdn.simpleicons.org/shadcnui/000000" width="16" />    | **shadcn/ui**       | Component primitives (Base Nova style)              |
+| 🐻                                                                      | **Zustand**         | Lightweight state management                        |
+| 📊                                                                      | **Recharts**        | Time-series telemetry charts                        |
+| <img src="https://cdn.simpleicons.org/lucide/F56565" width="16" />      | **Lucide**          | Icons                                               |
+| <img src="https://cdn.simpleicons.org/nodedotjs/5FA04E" width="16" />   | **Node v24**        | Runtime (see `.nvmrc`)                              |
 
 ## Getting Started
 
@@ -108,23 +108,23 @@ Link communicates with `link-server` over two channels:
 
 ### REST (`/api/*`)
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/config` | GET | Robot configuration |
-| `/api/status` | GET | Server uptime, mode, motor count |
-| `/api/motors` | GET | List all motors |
-| `/api/motors/:id` | GET | Motor detail (angle, velocity, torque, temp) |
-| `/api/motors/:id/enable` | POST | Enable motor |
-| `/api/motors/:id/disable` | POST | Disable motor |
-| `/api/motors/:id/zero` | POST | Zero motor encoder |
-| `/api/motors/:id/move` | POST | Position move (`{ position_rad, kp?, kd? }`) |
-| `/api/motors/:id/control` | POST | MIT control (`{ position, velocity, kp, kd, torque }`) |
-| `/api/arms` | GET | List arms with joint info |
-| `/api/arms/:side/enable` | POST | Enable all joints on arm |
-| `/api/arms/:side/disable` | POST | Disable all joints on arm |
-| `/api/arms/:side/home` | POST | Home arm to neutral position |
-| `/api/arms/:side/pose` | POST | Set arm pose (`{ joints: {name: rad}, kp?, kd? }`) |
-| `/api/logs` | GET | Recent log entries (`?limit=N`) |
+| Endpoint                  | Method | Description                                            |
+| ------------------------- | ------ | ------------------------------------------------------ |
+| `/api/config`             | GET    | Robot configuration                                    |
+| `/api/status`             | GET    | Server uptime, mode, motor count                       |
+| `/api/motors`             | GET    | List all motors                                        |
+| `/api/motors/:id`         | GET    | Motor detail (angle, velocity, torque, temp)           |
+| `/api/motors/:id/enable`  | POST   | Enable motor                                           |
+| `/api/motors/:id/disable` | POST   | Disable motor                                          |
+| `/api/motors/:id/zero`    | POST   | Zero motor encoder                                     |
+| `/api/motors/:id/move`    | POST   | Position move (`{ position_rad, kp?, kd? }`)           |
+| `/api/motors/:id/control` | POST   | MIT control (`{ position, velocity, kp, kd, torque }`) |
+| `/api/arms`               | GET    | List arms with joint info                              |
+| `/api/arms/:side/enable`  | POST   | Enable all joints on arm                               |
+| `/api/arms/:side/disable` | POST   | Disable all joints on arm                              |
+| `/api/arms/:side/home`    | POST   | Home arm to neutral position                           |
+| `/api/arms/:side/pose`    | POST   | Set arm pose (`{ joints: {name: rad}, kp?, kd? }`)     |
+| `/api/logs`               | GET    | Recent log entries (`?limit=N`)                        |
 
 ### WebTransport (real-time telemetry)
 
@@ -135,5 +135,5 @@ Motor feedback (position, velocity, torque, temperature) is streamed as datagram
 `@/` maps to `src/` in both TypeScript and Vite:
 
 ```ts
-import { Button } from "@/components/ui/button"
+import { Button } from "@/components/ui/button";
 ```

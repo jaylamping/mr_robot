@@ -5,7 +5,7 @@ import { useTelemetryStore } from '@/stores/telemetry'
 import { MotorCard } from '@/components/MotorCard'
 import { RobotDiagram } from '@/components/RobotDiagram'
 import { Badge } from '@/components/ui/badge'
-import { BotIcon } from 'lucide-react'
+import { LuBot } from 'react-icons/lu'
 
 export const Route = createFileRoute('/')({
   component: OverviewPage,
@@ -48,7 +48,7 @@ function OverviewPage() {
   if (motors.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-center">
-        <BotIcon className="size-12 text-muted-foreground/50 mb-4" />
+        <LuBot className="size-12 text-muted-foreground/50 mb-4" />
         <h2 className="text-lg font-medium text-foreground mb-1">No motors configured</h2>
         <p className="text-sm text-muted-foreground max-w-sm">
           Add motor CAN IDs to <code className="text-xs bg-muted px-1 py-0.5 rounded">config/robot.yaml</code> and

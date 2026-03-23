@@ -19,7 +19,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { SaveIcon, PlayIcon, CameraIcon, Trash2Icon } from 'lucide-react'
+import { LuSave, LuPlay, LuCamera, LuTrash2 } from 'react-icons/lu'
 
 interface Pose {
   name: string
@@ -103,7 +103,7 @@ export function PoseEditor({ joints, onApply }: PoseEditorProps) {
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium text-muted-foreground">Poses</p>
         <Button variant="ghost" size="xs" onClick={teachFromCurrent}>
-          <CameraIcon className="size-3" />
+          <LuCamera className="size-3" />
           Teach
         </Button>
       </div>
@@ -161,7 +161,7 @@ export function PoseEditor({ joints, onApply }: PoseEditorProps) {
 
           <div className="flex gap-2 pt-2">
             <Button onClick={handleApply} className="flex-1">
-              <PlayIcon className="size-4" />
+              <LuPlay className="size-4" />
               Apply Pose
             </Button>
             <SavePoseDialog
@@ -186,7 +186,7 @@ export function PoseEditor({ joints, onApply }: PoseEditorProps) {
                   setEditValues({})
                 }}
               >
-                <Trash2Icon className="size-4" />
+                <LuTrash2 className="size-4" />
               </Button>
             )}
           </div>
@@ -209,7 +209,7 @@ function SavePoseDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={<Button variant="outline" size="icon" />}>
-        <SaveIcon className="size-4" />
+        <LuSave className="size-4" />
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>

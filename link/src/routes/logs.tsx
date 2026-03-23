@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Switch } from '@/components/ui/switch'
-import { RefreshCwIcon } from 'lucide-react'
+import { LuRefreshCw } from 'react-icons/lu'
 
 export const Route = createFileRoute('/logs')({
   component: LogsPage,
@@ -58,7 +58,7 @@ function LogsPage() {
                 Auto-refresh
               </div>
               <Button variant="ghost" size="icon-xs" onClick={refresh} disabled={loading}>
-                <RefreshCwIcon className={`size-3 ${loading ? 'animate-spin' : ''}`} />
+                <LuRefreshCw className={`size-3 ${loading ? 'animate-spin' : ''}`} />
               </Button>
             </div>
           </CardAction>

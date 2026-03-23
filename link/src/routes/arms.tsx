@@ -18,7 +18,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { PowerIcon, PowerOffIcon, HomeIcon } from 'lucide-react'
+import { LuPower, LuPowerOff, LuHouse } from 'react-icons/lu'
 
 export const Route = createFileRoute('/arms')({
   component: ArmsPage,
@@ -115,14 +115,14 @@ function ArmPanel({ arm }: { arm: ArmInfo }) {
           <div className="flex gap-2">
             <ConfirmAction
               label="Enable All"
-              icon={<PowerIcon className="size-4" />}
+              icon={<LuPower className="size-4" />}
               description={`Enable all ${totalJoints} joints on the ${arm.side} arm. Motors will energize.`}
               disabled={busy}
               onConfirm={() => exec('Enable All', () => enableArm(arm.side))}
             />
             <ConfirmAction
               label="Disable All"
-              icon={<PowerOffIcon className="size-4" />}
+              icon={<LuPowerOff className="size-4" />}
               description={`Disable all joints on the ${arm.side} arm. Motors will de-energize and may drop.`}
               variant="destructive"
               disabled={busy}
@@ -130,7 +130,7 @@ function ArmPanel({ arm }: { arm: ArmInfo }) {
             />
             <ConfirmAction
               label="Home"
-              icon={<HomeIcon className="size-4" />}
+              icon={<LuHouse className="size-4" />}
               description={`Run startup recovery on all ${arm.side} arm joints. Joints will move toward home position.`}
               disabled={busy}
               onConfirm={() => exec('Home', () => homeArm(arm.side))}

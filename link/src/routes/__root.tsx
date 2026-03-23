@@ -7,25 +7,25 @@ import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import {
-  LayoutDashboardIcon,
-  CpuIcon,
-  ArmchairIcon,
-  SettingsIcon,
-  ScrollTextIcon,
-  MenuIcon,
-  BotIcon,
-} from 'lucide-react'
+  LuLayoutDashboard,
+  LuCpu,
+  LuArmchair,
+  LuSettings,
+  LuScrollText,
+  LuMenu,
+  LuBot,
+} from 'react-icons/lu'
 
 export const Route = createRootRoute({
   component: RootLayout,
 })
 
 const navItems = [
-  { to: '/', label: 'Overview', icon: LayoutDashboardIcon },
-  { to: '/system', label: 'System', icon: CpuIcon },
-  { to: '/arms', label: 'Arms', icon: ArmchairIcon },
-  { to: '/settings', label: 'Settings', icon: SettingsIcon },
-  { to: '/logs', label: 'Logs', icon: ScrollTextIcon },
+  { to: '/', label: 'Overview', icon: LuLayoutDashboard },
+  { to: '/system', label: 'System', icon: LuCpu },
+  { to: '/arms', label: 'Arms', icon: LuArmchair },
+  { to: '/settings', label: 'Settings', icon: LuSettings },
+  { to: '/logs', label: 'Logs', icon: LuScrollText },
 ] as const
 
 function RootLayout() {
@@ -45,7 +45,7 @@ function RootLayout() {
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <div className="flex h-12 items-center border-b px-3 md:hidden">
           <SheetTrigger render={<Button variant="ghost" size="icon" />}>
-            <MenuIcon className="size-5" />
+            <LuMenu className="size-5" />
           </SheetTrigger>
           <span className="ml-2 text-sm font-semibold">Link</span>
         </div>
@@ -82,7 +82,7 @@ function SidebarContent({
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b p-4">
-        <BotIcon className="size-5 text-primary" />
+        <LuBot className="size-5 text-primary" />
         <div>
           <h1 className="text-base font-bold leading-tight">Link</h1>
           <p className="text-xs text-muted-foreground">Robot Control</p>

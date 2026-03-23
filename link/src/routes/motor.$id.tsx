@@ -6,7 +6,7 @@ import { TelemetryChart } from '@/components/TelemetryChart'
 import { MotorControl } from '@/components/MotorControl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { ArrowLeftIcon } from 'lucide-react'
+import { LuArrowLeft } from 'react-icons/lu'
 
 export const Route = createFileRoute('/motor/$id')({
   component: MotorDetailPage,
@@ -49,7 +49,7 @@ function MotorDetailPage() {
     <div>
       <div className="mb-6">
         <Link to="/" className="mb-2 -ml-2 inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-          <ArrowLeftIcon className="size-4" />
+          <LuArrowLeft className="size-4" />
           Overview
         </Link>
         <h2 className="text-xl font-semibold">{formatJointName(motor.joint_name)}</h2>
