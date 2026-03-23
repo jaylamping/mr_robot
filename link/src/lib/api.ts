@@ -47,18 +47,60 @@ export interface RobotConfig {
   }
 }
 
+export interface ServerStatus {
+  uptime_secs: number
+  mode: string
+  motor_count: number
+  transport_type: string
+}
+
+export interface ArmInfo {
+  side: string
+  joints: ArmJointInfo[]
+}
+
+export interface ArmJointInfo {
+  name: string
+  can_id: number | null
+  actuator: string
+  limits: [number, number]
+  home_rad: number
+  angle_rad?: number
+  velocity_rads?: number
+  torque_nm?: number
+  online: boolean
+}
+
+export interface PoseRequest {
+  joints: Record<string, number>
+  kp?: number
+  kd?: number
+}
+
+export interface LogEntry {
+  timestamp_ms: number
+  level: string
+  target: string
+  message: string
+}
+
 const BASE = '/api'
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init)
   if (!res.ok) {
-    throw new Error(`API ${res.status}: ${res.statusText}`)
+    const text = await res.text().catch(() => res.statusText)
+    throw new Error(`API ${res.status}: ${text}`)
   }
   return res.json()
 }
 
 export function getConfig(): Promise<RobotConfig> {
   return fetchJson('/config')
+}
+
+export function getStatus(): Promise<ServerStatus> {
+  return fetchJson('/status')
 }
 
 export function getMotors(): Promise<MotorInfo[]> {
@@ -106,5 +148,33 @@ export function controlMotor(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ position, velocity, kp, kd, torque }),
+  })
+}
+
+export function getArms(): Promise<ArmInfo[]> {
+  return fetchJson('/arms')
+}
+
+export function enableArm(side: string): Promise<CommandResponse> {
+  return fetchJson(`/arms/${side}/enable`, { method: 'POST' })
+}
+
+export function disableArm(side: string): Promise<CommandResponse> {
+  return fetchJson(`/arms/${side}/disable`, { method: 'POST' })
+}
+
+export function homeArm(side: string): Promise<CommandResponse> {
+  return fetchJson(`/arms/${side}/home`, { method: 'POST' })
+}
+
+export function getLogs(limit = 200): Promise<LogEntry[]> {
+  return fetchJson(`/logs?limit=${limit}`)
+}
+
+export function setArmPose(side: string, pose: PoseRequest): Promise<CommandResponse> {
+  return fetchJson(`/arms/${side}/pose`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(pose),
   })
 }

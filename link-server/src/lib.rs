@@ -1,27 +1,34 @@
 pub mod api;
+pub mod log_buffer;
 pub mod telemetry;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::Router;
 use tokio::sync::{broadcast, Mutex};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
+use cortex::arm::Arm;
 use cortex::config::RobotConfig;
 use cortex::motor::Motor;
 
+use crate::log_buffer::LogBuffer;
 use crate::telemetry::TelemetrySnapshot;
 
 pub struct AppState {
     pub config: RobotConfig,
     pub motors: Mutex<HashMap<u8, Motor>>,
+    pub arms: Mutex<HashMap<String, Arm>>,
     pub telemetry_tx: broadcast::Sender<TelemetrySnapshot>,
-    /// Base64-encoded SHA-256 hash of the WebTransport server certificate.
     pub cert_hash_b64: String,
-    /// Port the WebTransport (QUIC) server listens on.
     pub wt_port: u16,
+    pub start_time: Instant,
+    pub mode: String,
+    pub transport_type: String,
+    pub log_buffer: LogBuffer,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {

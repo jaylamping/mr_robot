@@ -1,4 +1,19 @@
-import { useState } from 'react';
+import { useState } from 'react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Slider } from '@/components/ui/slider'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
 import {
   enableMotor,
   disableMotor,
@@ -6,215 +21,232 @@ import {
   moveMotor,
   controlMotor,
   type CommandResponse,
-} from '../lib/api';
+} from '@/lib/api'
 
 interface MotorControlProps {
-  canId: number;
-  currentAngleRad: number;
+  canId: number
+  currentAngleRad: number
+  limitsRad?: [number, number]
 }
 
-export const MotorControl = ({ canId, currentAngleRad }: MotorControlProps) => {
-  const [positionDeg, setPositionDeg] = useState(
-    (currentAngleRad * 180) / Math.PI
-  );
-  const [kp, setKp] = useState(30);
-  const [kd, setKd] = useState(1);
-  const [lastResult, setLastResult] = useState<CommandResponse | null>(null);
-  const [busy, setBusy] = useState(false);
+export function MotorControl({ canId, currentAngleRad, limitsRad }: MotorControlProps) {
+  const [positionDeg, setPositionDeg] = useState((currentAngleRad * 180) / Math.PI)
+  const [kp, setKp] = useState(30)
+  const [kd, setKd] = useState(1)
+  const [busy, setBusy] = useState(false)
 
-  async function exec(fn: () => Promise<CommandResponse>) {
-    setBusy(true);
+  const minDeg = limitsRad ? (limitsRad[0] * 180) / Math.PI : -180
+  const maxDeg = limitsRad ? (limitsRad[1] * 180) / Math.PI : 180
+
+  async function exec(label: string, fn: () => Promise<CommandResponse>) {
+    setBusy(true)
     try {
-      const res = await fn();
-      setLastResult(res);
+      const res = await fn()
+      if (res.success) {
+        toast.success(`${label}: OK`, {
+          description: res.angle_rad != null
+            ? `pos: ${res.angle_rad.toFixed(3)} rad, vel: ${res.velocity_rads?.toFixed(3)} rad/s, trq: ${res.torque_nm?.toFixed(3)} N·m`
+            : undefined,
+        })
+      } else {
+        toast.error(`${label} failed`, { description: res.error })
+      }
     } catch (e) {
-      setLastResult({
-        success: false,
-        error: e instanceof Error ? e.message : String(e),
-      });
+      toast.error(`${label} failed`, {
+        description: e instanceof Error ? e.message : String(e),
+      })
     } finally {
-      setBusy(false);
+      setBusy(false)
     }
   }
 
   return (
-    <div className='rounded-lg border border-zinc-800 bg-zinc-900 p-4 space-y-4'>
-      <h3 className='text-sm font-medium text-zinc-400'>Controls</h3>
-
-      <div className='flex flex-wrap gap-2'>
-        <ActionButton
-          label='Enable'
-          disabled={busy}
-          onClick={() => exec(() => enableMotor(canId))}
-          variant='green'
-        />
-        <ActionButton
-          label='Disable'
-          disabled={busy}
-          onClick={() => exec(() => disableMotor(canId))}
-          variant='red'
-        />
-        <ActionButton
-          label='Set Zero'
-          disabled={busy}
-          onClick={() => exec(() => zeroMotor(canId))}
-          variant='default'
-        />
-      </div>
-
-      <div className='border-t border-zinc-800 pt-4'>
-        <p className='text-xs text-zinc-500 mb-2'>Position Command</p>
-        <div className='grid grid-cols-3 gap-2 mb-2'>
-          <div>
-            <label className='text-xs text-zinc-500'>Target (°)</label>
-            <input
-              type='number'
-              value={positionDeg}
-              onChange={(e) => setPositionDeg(Number(e.target.value))}
-              className='w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-100 font-mono'
-              step={1}
-            />
-          </div>
-          <div>
-            <label className='text-xs text-zinc-500'>kp</label>
-            <input
-              type='number'
-              value={kp}
-              onChange={(e) => setKp(Number(e.target.value))}
-              className='w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-100 font-mono'
-              step={1}
-              min={0}
-              max={5000}
-            />
-          </div>
-          <div>
-            <label className='text-xs text-zinc-500'>kd</label>
-            <input
-              type='number'
-              value={kd}
-              onChange={(e) => setKd(Number(e.target.value))}
-              className='w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-100 font-mono'
-              step={0.1}
-              min={0}
-              max={100}
-            />
-          </div>
-        </div>
-        <div className='mb-2'>
-          <input
-            type='range'
-            min={-180}
-            max={180}
-            step={0.5}
-            value={positionDeg}
-            onChange={(e) => setPositionDeg(Number(e.target.value))}
-            className='w-full accent-blue-500'
+    <Card>
+      <CardHeader>
+        <CardTitle>Controls</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap gap-2">
+          <ConfirmButton
+            label="Enable"
+            description="This will energize the motor. Make sure the area is clear."
+            variant="default"
+            confirmVariant="default"
+            disabled={busy}
+            onConfirm={() => exec('Enable', () => enableMotor(canId))}
           />
+          <ConfirmButton
+            label="Disable"
+            description="This will de-energize the motor. It may drop under gravity."
+            variant="destructive"
+            confirmVariant="destructive"
+            disabled={busy}
+            onConfirm={() => exec('Disable', () => disableMotor(canId))}
+          />
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => exec('Set Zero', () => zeroMotor(canId))}
+          >
+            Set Zero
+          </Button>
         </div>
-        <ActionButton
-          label='Move'
-          disabled={busy}
-          onClick={() =>
-            exec(() => moveMotor(canId, (positionDeg * Math.PI) / 180, kp, kd))
-          }
-          variant='blue'
-        />
-      </div>
 
-      <div className='border-t border-zinc-800 pt-4'>
-        <p className='text-xs text-zinc-500 mb-2'>Raw MIT Control</p>
-        <RawControlForm canId={canId} busy={busy} exec={exec} />
-      </div>
+        <Tabs defaultValue="position">
+          <TabsList>
+            <TabsTrigger value="position">Position</TabsTrigger>
+            <TabsTrigger value="raw">Raw MIT</TabsTrigger>
+          </TabsList>
 
-      {lastResult && (
-        <div
-          className={`text-xs font-mono p-2 rounded ${
-            lastResult.success
-              ? 'bg-emerald-950/50 text-emerald-300'
-              : 'bg-red-950/50 text-red-300'
-          }`}
-        >
-          {lastResult.success
-            ? `OK — pos: ${lastResult.angle_rad?.toFixed(3)} rad, vel: ${lastResult.velocity_rads?.toFixed(3)} rad/s, trq: ${lastResult.torque_nm?.toFixed(3)} N·m`
-            : `Error: ${lastResult.error}`}
-        </div>
-      )}
-    </div>
-  );
-};
+          <TabsContent value="position" className="space-y-3 pt-3">
+            <div className="grid grid-cols-3 gap-2">
+              <LabeledInput label="Target (°)" value={positionDeg} onChange={setPositionDeg} step={1} />
+              <LabeledInput label="kp" value={kp} onChange={setKp} step={1} min={0} max={5000} />
+              <LabeledInput label="kd" value={kd} onChange={setKd} step={0.1} min={0} max={100} />
+            </div>
+            <div className="relative pt-1 pb-2">
+              <Slider
+                value={[positionDeg]}
+                onValueChange={(v) => {
+                  const arr = Array.isArray(v) ? v : [v]
+                  setPositionDeg(arr[0])
+                }}
+                min={minDeg}
+                max={maxDeg}
+                step={0.5}
+              />
+              <div className="mt-1 flex justify-between text-[10px] text-muted-foreground font-mono">
+                <span>{minDeg.toFixed(0)}°</span>
+                <span>{maxDeg.toFixed(0)}°</span>
+              </div>
+            </div>
+            <Button
+              className="w-full"
+              disabled={busy}
+              onClick={() => exec('Move', () => moveMotor(canId, (positionDeg * Math.PI) / 180, kp, kd))}
+            >
+              Move
+            </Button>
+          </TabsContent>
+
+          <TabsContent value="raw" className="pt-3">
+            <RawControlForm canId={canId} busy={busy} exec={exec} />
+          </TabsContent>
+        </Tabs>
+      </CardContent>
+    </Card>
+  )
+}
 
 function RawControlForm({
   canId,
   busy,
   exec,
 }: {
-  canId: number;
-  busy: boolean;
-  exec: (fn: () => Promise<CommandResponse>) => Promise<void>;
+  canId: number
+  busy: boolean
+  exec: (label: string, fn: () => Promise<CommandResponse>) => Promise<void>
 }) {
-  const [pos, setPos] = useState(0);
-  const [vel, setVel] = useState(0);
-  const [rkp, setRkp] = useState(30);
-  const [rkd, setRkd] = useState(1);
-  const [trq, setTrq] = useState(0);
+  const [pos, setPos] = useState(0)
+  const [vel, setVel] = useState(0)
+  const [rkp, setRkp] = useState(30)
+  const [rkd, setRkd] = useState(1)
+  const [trq, setTrq] = useState(0)
 
   return (
-    <div>
-      <div className='grid grid-cols-5 gap-2 mb-2'>
-        {[
-          { label: 'pos (rad)', value: pos, set: setPos, step: 0.1 },
-          { label: 'vel (rad/s)', value: vel, set: setVel, step: 0.5 },
-          { label: 'kp', value: rkp, set: setRkp, step: 1 },
-          { label: 'kd', value: rkd, set: setRkd, step: 0.1 },
-          { label: 'trq (N·m)', value: trq, set: setTrq, step: 0.5 },
-        ].map((f) => (
-          <div key={f.label}>
-            <label className='text-xs text-zinc-500'>{f.label}</label>
-            <input
-              type='number'
-              value={f.value}
-              onChange={(e) => f.set(Number(e.target.value))}
-              className='w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-100 font-mono'
-              step={f.step}
-            />
-          </div>
-        ))}
+    <div className="space-y-3">
+      <div className="grid grid-cols-5 gap-2">
+        <LabeledInput label="pos (rad)" value={pos} onChange={setPos} step={0.1} />
+        <LabeledInput label="vel (rad/s)" value={vel} onChange={setVel} step={0.5} />
+        <LabeledInput label="kp" value={rkp} onChange={setRkp} step={1} />
+        <LabeledInput label="kd" value={rkd} onChange={setRkd} step={0.1} />
+        <LabeledInput label="trq (N·m)" value={trq} onChange={setTrq} step={0.5} />
       </div>
-      <ActionButton
-        label='Send'
+      <Button
+        variant="outline"
+        className="w-full"
         disabled={busy}
-        onClick={() => exec(() => controlMotor(canId, pos, vel, rkp, rkd, trq))}
-        variant='default'
-      />
+        onClick={() => exec('Send Control', () => controlMotor(canId, pos, vel, rkp, rkd, trq))}
+      >
+        Send
+      </Button>
     </div>
-  );
+  )
 }
 
-function ActionButton({
+function LabeledInput({
   label,
-  onClick,
-  disabled,
-  variant = 'default',
+  value,
+  onChange,
+  step,
+  min,
+  max,
 }: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  variant?: 'default' | 'green' | 'red' | 'blue';
+  label: string
+  value: number
+  onChange: (v: number) => void
+  step: number
+  min?: number
+  max?: number
 }) {
-  const colors = {
-    default: 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200',
-    green: 'bg-emerald-900/60 hover:bg-emerald-800/60 text-emerald-300',
-    red: 'bg-red-900/60 hover:bg-red-800/60 text-red-300',
-    blue: 'bg-blue-900/60 hover:bg-blue-800/60 text-blue-300',
-  };
+  return (
+    <div>
+      <label className="mb-1 block text-xs text-muted-foreground">{label}</label>
+      <Input
+        type="number"
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        step={step}
+        min={min}
+        max={max}
+        className="font-mono"
+      />
+    </div>
+  )
+}
+
+function ConfirmButton({
+  label,
+  description,
+  variant,
+  confirmVariant,
+  disabled,
+  onConfirm,
+}: {
+  label: string
+  description: string
+  variant: 'default' | 'destructive' | 'outline'
+  confirmVariant: 'default' | 'destructive'
+  disabled?: boolean
+  onConfirm: () => void
+}) {
+  const [open, setOpen] = useState(false)
 
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={`px-3 py-1.5 rounded text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${colors[variant]}`}
-    >
-      {label}
-    </button>
-  );
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger render={<Button variant={variant} disabled={disabled} />}>
+        {label}
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Confirm: {label}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant={confirmVariant}
+            onClick={() => {
+              setOpen(false)
+              onConfirm()
+            }}
+          >
+            {label}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
 }

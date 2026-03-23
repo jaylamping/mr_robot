@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -63,10 +63,42 @@ struct CommandResponse {
     torque_nm: Option<f32>,
 }
 
+#[derive(Serialize)]
+struct StatusResponse {
+    uptime_secs: u64,
+    mode: String,
+    motor_count: usize,
+    transport_type: String,
+}
+
+#[derive(Serialize)]
+struct ArmInfo {
+    side: String,
+    joints: Vec<ArmJointInfo>,
+}
+
+#[derive(Serialize)]
+struct ArmJointInfo {
+    name: String,
+    can_id: Option<u8>,
+    actuator: String,
+    limits: (f64, f64),
+    home_rad: f64,
+    online: bool,
+}
+
+#[derive(Deserialize)]
+struct PoseRequest {
+    joints: std::collections::HashMap<String, f32>,
+    kp: Option<f32>,
+    kd: Option<f32>,
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/config", get(get_config))
         .route("/cert-hash", get(get_cert_hash))
+        .route("/status", get(get_status))
         .route("/motors", get(get_motors))
         .route("/motors/{id}", get(get_motor))
         .route("/motors/{id}/enable", post(enable_motor))
@@ -74,10 +106,39 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/motors/{id}/zero", post(zero_motor))
         .route("/motors/{id}/move", post(move_motor))
         .route("/motors/{id}/control", post(control_motor))
+        .route("/arms", get(get_arms))
+        .route("/arms/{side}/enable", post(enable_arm))
+        .route("/arms/{side}/disable", post(disable_arm))
+        .route("/arms/{side}/home", post(home_arm))
+        .route("/arms/{side}/pose", post(set_arm_pose))
+        .route("/logs", get(get_logs))
 }
 
 async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(serde_json::to_value(&state.config).unwrap())
+}
+
+async fn get_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let motors = state.motors.lock().await;
+    Json(StatusResponse {
+        uptime_secs: state.start_time.elapsed().as_secs(),
+        mode: state.mode.clone(),
+        motor_count: motors.len(),
+        transport_type: state.transport_type.clone(),
+    })
+}
+
+#[derive(Deserialize)]
+struct LogsQuery {
+    limit: Option<usize>,
+}
+
+async fn get_logs(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<LogsQuery>,
+) -> impl IntoResponse {
+    let limit = q.limit.unwrap_or(200).min(500);
+    Json(state.log_buffer.recent(limit))
 }
 
 async fn get_cert_hash(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -288,6 +349,145 @@ async fn control_motor(
             torque_nm: None,
         })),
     }
+}
+
+async fn get_arms(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut result = Vec::new();
+    let motors = state.motors.lock().await;
+
+    let arm_configs: Vec<(&str, &cortex::config::ArmConfig)> = [
+        ("left", state.config.arm_left.as_ref()),
+        ("right", state.config.arm_right.as_ref()),
+    ]
+    .into_iter()
+    .filter_map(|(side, arm)| arm.map(|a| (side, a)))
+    .collect();
+
+    for (side, arm_cfg) in arm_configs {
+        let mut joints = Vec::new();
+        for (name, joint) in arm_cfg.joints() {
+            let online = joint.can_id.map_or(false, |id| motors.contains_key(&id));
+            joints.push(ArmJointInfo {
+                name: name.to_string(),
+                can_id: joint.can_id,
+                actuator: joint.actuator.clone(),
+                limits: joint.limits,
+                home_rad: joint.home_rad,
+                online,
+            });
+        }
+        result.push(ArmInfo {
+            side: side.to_string(),
+            joints,
+        });
+    }
+
+    Json(result)
+}
+
+async fn enable_arm(
+    State(state): State<Arc<AppState>>,
+    Path(side): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let mut arms = state.arms.lock().await;
+    let arm = arms.get_mut(&side).ok_or(StatusCode::NOT_FOUND)?;
+    match arm.enable_all().await {
+        Ok(()) => Ok(Json(CommandResponse {
+            success: true,
+            error: None,
+            angle_rad: None,
+            velocity_rads: None,
+            torque_nm: None,
+        })),
+        Err(e) => Ok(Json(CommandResponse {
+            success: false,
+            error: Some(format!("{:#}", e)),
+            angle_rad: None,
+            velocity_rads: None,
+            torque_nm: None,
+        })),
+    }
+}
+
+async fn disable_arm(
+    State(state): State<Arc<AppState>>,
+    Path(side): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let mut arms = state.arms.lock().await;
+    let arm = arms.get_mut(&side).ok_or(StatusCode::NOT_FOUND)?;
+    match arm.disable_all().await {
+        Ok(()) => Ok(Json(CommandResponse {
+            success: true,
+            error: None,
+            angle_rad: None,
+            velocity_rads: None,
+            torque_nm: None,
+        })),
+        Err(e) => Ok(Json(CommandResponse {
+            success: false,
+            error: Some(format!("{:#}", e)),
+            angle_rad: None,
+            velocity_rads: None,
+            torque_nm: None,
+        })),
+    }
+}
+
+async fn home_arm(
+    State(state): State<Arc<AppState>>,
+    Path(side): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let mut arms = state.arms.lock().await;
+    let arm = arms.get_mut(&side).ok_or(StatusCode::NOT_FOUND)?;
+    match arm.startup_safe_recovery().await {
+        Ok(summary) => Ok(Json(CommandResponse {
+            success: true,
+            error: if summary.stall_backoffs > 0 {
+                Some(format!("{} stall backoffs during recovery", summary.stall_backoffs))
+            } else {
+                None
+            },
+            angle_rad: None,
+            velocity_rads: None,
+            torque_nm: None,
+        })),
+        Err(e) => Ok(Json(CommandResponse {
+            success: false,
+            error: Some(format!("{:#}", e)),
+            angle_rad: None,
+            velocity_rads: None,
+            torque_nm: None,
+        })),
+    }
+}
+
+async fn set_arm_pose(
+    State(state): State<Arc<AppState>>,
+    Path(side): Path<String>,
+    Json(req): Json<PoseRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let mut arms = state.arms.lock().await;
+    let arm = arms.get_mut(&side).ok_or(StatusCode::NOT_FOUND)?;
+    let kp = req.kp;
+    let kd = req.kd;
+    for (joint_name, position_rad) in &req.joints {
+        if let Err(e) = arm.set_joint(joint_name, *position_rad, kp, kd).await {
+            return Ok(Json(CommandResponse {
+                success: false,
+                error: Some(format!("joint '{}': {:#}", joint_name, e)),
+                angle_rad: None,
+                velocity_rads: None,
+                torque_nm: None,
+            }));
+        }
+    }
+    Ok(Json(CommandResponse {
+        success: true,
+        error: None,
+        angle_rad: None,
+        velocity_rads: None,
+        torque_nm: None,
+    }))
 }
 
 fn find_joint_config(state: &AppState, can_id: u8) -> (String, (f64, f64)) {

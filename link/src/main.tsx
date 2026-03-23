@@ -3,6 +3,8 @@ import './index.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { Toaster } from '@/components/ui/sonner'
 import { routeTree } from './routeTree.gen'
 
 const router = createRouter({ routeTree })
@@ -15,6 +17,9 @@ declare module '@tanstack/react-router' {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <RouterProvider router={router} />
+    <TooltipProvider>
+      <RouterProvider router={router} />
+      <Toaster position="bottom-right" />
+    </TooltipProvider>
   </StrictMode>,
 )

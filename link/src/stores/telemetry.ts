@@ -17,7 +17,7 @@ export interface TelemetrySnapshot {
   motors: MotorSnapshot[]
 }
 
-const HISTORY_MAX = 600 // 30s at 20Hz
+const HISTORY_MAX = 600
 
 interface TelemetryState {
   motors: Record<number, MotorSnapshot>

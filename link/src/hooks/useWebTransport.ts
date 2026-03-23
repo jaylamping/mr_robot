@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { useTelemetryStore, type TelemetrySnapshot } from '../stores/telemetry'
+import { useTelemetryStore, type TelemetrySnapshot } from '@/stores/telemetry'
 
 interface CertHashResponse {
   hash_b64: string
@@ -58,7 +58,7 @@ export function useWebTransport() {
               const snap = JSON.parse(json) as TelemetrySnapshot
               updateSnapshot(snap)
             } catch {
-              // malformed datagram, skip
+              // malformed datagram
             }
           }
 

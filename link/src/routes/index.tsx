@@ -1,7 +1,11 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
-import { getMotors, type MotorInfo } from '../lib/api'
-import { MotorCard } from '../components/MotorCard'
+import { getMotors, getConfig, type MotorInfo, type RobotConfig } from '@/lib/api'
+import { useTelemetryStore } from '@/stores/telemetry'
+import { MotorCard } from '@/components/MotorCard'
+import { RobotDiagram } from '@/components/RobotDiagram'
+import { Badge } from '@/components/ui/badge'
+import { BotIcon } from 'lucide-react'
 
 export const Route = createFileRoute('/')({
   component: OverviewPage,
@@ -9,13 +13,15 @@ export const Route = createFileRoute('/')({
 
 function OverviewPage() {
   const [motors, setMotors] = useState<MotorInfo[]>([])
+  const [config, setConfig] = useState<RobotConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
+  const telemetryMotors = useTelemetryStore((s) => s.motors)
 
   useEffect(() => {
-    getMotors()
-      .then(setMotors)
+    Promise.all([getMotors(), getConfig()])
+      .then(([m, c]) => { setMotors(m); setConfig(c) })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
@@ -23,7 +29,7 @@ function OverviewPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <p className="text-zinc-500 text-sm">Loading motors...</p>
+        <p className="text-muted-foreground text-sm">Loading motors...</p>
       </div>
     )
   }
@@ -32,31 +38,66 @@ function OverviewPage() {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
-          <p className="text-red-400 text-sm mb-2">Failed to load motors</p>
-          <p className="text-zinc-500 text-xs font-mono">{error}</p>
+          <p className="text-destructive text-sm mb-2">Failed to load motors</p>
+          <p className="text-muted-foreground text-xs font-mono">{error}</p>
         </div>
       </div>
     )
   }
 
-  const onlineMotors = motors.filter((m) => m.online)
-  const offlineMotors = motors.filter((m) => !m.online)
+  if (motors.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 text-center">
+        <BotIcon className="size-12 text-muted-foreground/50 mb-4" />
+        <h2 className="text-lg font-medium text-foreground mb-1">No motors configured</h2>
+        <p className="text-sm text-muted-foreground max-w-sm">
+          Add motor CAN IDs to <code className="text-xs bg-muted px-1 py-0.5 rounded">config/robot.yaml</code> and
+          restart the link server.
+        </p>
+      </div>
+    )
+  }
+
+  const onlineCount = Object.values(telemetryMotors).filter((m) => m.online).length
+  const faultCount = Object.values(telemetryMotors).filter((m) => m.faults.length > 0).length
+  const offlineCount = motors.length - onlineCount
+
+  const onlineMotors = motors.filter((m) => telemetryMotors[m.can_id]?.online)
+  const offlineMotors = motors.filter((m) => !telemetryMotors[m.can_id]?.online)
 
   return (
     <div>
       <div className="mb-6">
-        <h2 className="text-xl font-semibold text-zinc-100">Overview</h2>
-        <p className="text-sm text-zinc-500 mt-1">
-          {motors.length} motor{motors.length !== 1 ? 's' : ''} configured
-          {onlineMotors.length > 0 && (
-            <span className="text-emerald-400"> · {onlineMotors.length} online</span>
+        <h2 className="text-xl font-semibold">Overview</h2>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Badge variant="outline">{motors.length} configured</Badge>
+          {onlineCount > 0 && (
+            <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
+              {onlineCount} online
+            </Badge>
           )}
-        </p>
+          {offlineCount > 0 && (
+            <Badge variant="secondary">{offlineCount} offline</Badge>
+          )}
+          {faultCount > 0 && (
+            <Badge variant="destructive">{faultCount} faulted</Badge>
+          )}
+        </div>
       </div>
+
+      {config && (
+        <div className="mb-6">
+          <RobotDiagram
+            armLeftCanIds={extractArmCanIds(config.arm_left)}
+            armRightCanIds={extractArmCanIds(config.arm_right)}
+            waistCanId={extractWaistCanId(config.waist)}
+          />
+        </div>
+      )}
 
       {onlineMotors.length > 0 && (
         <section className="mb-8">
-          <h3 className="text-sm font-medium text-zinc-400 mb-3 uppercase tracking-wider">
+          <h3 className="text-sm font-medium text-muted-foreground mb-3 uppercase tracking-wider">
             Online
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -73,7 +114,7 @@ function OverviewPage() {
 
       {offlineMotors.length > 0 && (
         <section>
-          <h3 className="text-sm font-medium text-zinc-400 mb-3 uppercase tracking-wider">
+          <h3 className="text-sm font-medium text-muted-foreground mb-3 uppercase tracking-wider">
             {onlineMotors.length > 0 ? 'Offline / Unassigned' : 'All Motors'}
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -89,4 +130,19 @@ function OverviewPage() {
       )}
     </div>
   )
+}
+
+function extractArmCanIds(arm: Record<string, unknown> | undefined): (number | null)[] {
+  if (!arm) return [null, null, null, null]
+  const joints = ['shoulder_pitch', 'shoulder_roll', 'upper_arm_yaw', 'elbow_pitch']
+  return joints.map((name) => {
+    const joint = arm[name] as { can_id?: number | null } | undefined
+    return joint?.can_id ?? null
+  })
+}
+
+function extractWaistCanId(waist: Record<string, unknown> | undefined): number | null {
+  if (!waist) return null
+  const rotation = waist['rotation'] as { can_id?: number | null } | undefined
+  return rotation?.can_id ?? null
 }

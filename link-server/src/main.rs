@@ -1,15 +1,20 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use base64::Engine;
 use clap::Parser;
 use tokio::sync::{broadcast, Mutex};
 use tracing::info;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use wtransport::Identity;
 
+use cortex::arm::Arm;
 use cortex::config::RobotConfig;
 use cortex::motor::{create_ch341_protocol, Motor};
+use link_server::log_buffer::LogBuffer;
 use link_server::telemetry::{self, TelemetrySnapshot};
 use link_server::{self, AppState};
 
@@ -38,7 +43,11 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    let log_buffer = LogBuffer::new();
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(log_buffer.clone())
+        .init();
     let cli = Cli::parse();
 
     let config = RobotConfig::load("config/robot.yaml")?;
@@ -48,10 +57,13 @@ async fn main() -> Result<()> {
     );
 
     let mut motors: HashMap<u8, Motor> = HashMap::new();
+    let mut arms: HashMap<String, Arm> = HashMap::new();
+    let transport_type;
 
     if !cli.no_hardware {
         info!("Opening CH341 transport on {}...", config.bus.port);
         let protocol = create_ch341_protocol(&config.bus.port).await?;
+        transport_type = "CH341".to_string();
 
         let all_ids = collect_can_ids(&config);
         for can_id in all_ids {
@@ -59,7 +71,15 @@ async fn main() -> Result<()> {
             motors.insert(can_id, Motor::new(protocol.clone(), can_id));
         }
         info!("{} motor(s) registered", motors.len());
+
+        if let Some(ref arm_cfg) = config.arm_left {
+            arms.insert("left".into(), Arm::new(arm_cfg, protocol.clone()));
+        }
+        if let Some(ref arm_cfg) = config.arm_right {
+            arms.insert("right".into(), Arm::new(arm_cfg, protocol.clone()));
+        }
     } else {
+        transport_type = "Mock".to_string();
         info!("--no-hardware: running with mock telemetry");
     }
 
@@ -78,14 +98,25 @@ async fn main() -> Result<()> {
     };
     info!("WebTransport cert hash: {}", cert_hash_b64);
 
+    let mode = if cli.no_hardware {
+        "mock".to_string()
+    } else {
+        "hardware".to_string()
+    };
+
     let (telemetry_tx, _) = broadcast::channel::<TelemetrySnapshot>(64);
 
     let state = Arc::new(AppState {
         config,
         motors: Mutex::new(motors),
+        arms: Mutex::new(arms),
         telemetry_tx,
         cert_hash_b64,
         wt_port: cli.wt_port,
+        start_time: Instant::now(),
+        mode,
+        transport_type,
+        log_buffer,
     });
 
     let telem_state = state.clone();

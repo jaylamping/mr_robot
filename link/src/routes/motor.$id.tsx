@@ -1,7 +1,12 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { useTelemetryStore } from '../stores/telemetry'
-import { TelemetryChart } from '../components/TelemetryChart'
-import { MotorControl } from '../components/MotorControl'
+import { useEffect, useState } from 'react'
+import { useTelemetryStore } from '@/stores/telemetry'
+import { getMotor, type MotorDetail } from '@/lib/api'
+import { TelemetryChart } from '@/components/TelemetryChart'
+import { MotorControl } from '@/components/MotorControl'
+import { Card, CardContent } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { ArrowLeftIcon } from 'lucide-react'
 
 export const Route = createFileRoute('/motor/$id')({
   component: MotorDetailPage,
@@ -14,14 +19,23 @@ function MotorDetailPage() {
   const motor = useTelemetryStore((s) => s.motors[canId])
   const history = useTelemetryStore((s) => s.history[canId] ?? [])
 
+  const [detail, setDetail] = useState<MotorDetail | null>(null)
+  useEffect(() => {
+    getMotor(canId).then(setDetail).catch(() => {})
+  }, [canId])
+
+  const limitsRad: [number, number] | undefined = detail
+    ? [detail.limits[0], detail.limits[1]]
+    : undefined
+
   if (!motor) {
     return (
       <div className="text-center py-16">
-        <p className="text-zinc-500 mb-4">No telemetry data for motor {canId}</p>
-        <p className="text-xs text-zinc-600 mb-4">
+        <p className="text-muted-foreground mb-4">No telemetry data for motor {canId}</p>
+        <p className="text-xs text-muted-foreground mb-4">
           The motor may be offline or telemetry is not yet connected.
         </p>
-        <Link to="/" className="text-sm text-blue-400 hover:underline">
+        <Link to="/" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline">
           Back to overview
         </Link>
       </div>
@@ -34,34 +48,37 @@ function MotorDetailPage() {
   return (
     <div>
       <div className="mb-6">
-        <Link to="/" className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
-          &larr; Overview
+        <Link to="/" className="mb-2 -ml-2 inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+          <ArrowLeftIcon className="size-4" />
+          Overview
         </Link>
-        <h2 className="text-xl font-semibold text-zinc-100 mt-2">
-          {formatJointName(motor.joint_name)}
-        </h2>
-        <p className="text-sm text-zinc-500">
-          CAN ID {motor.can_id} · {motor.mode} ·{' '}
-          <span className={motor.online ? 'text-emerald-400' : 'text-zinc-500'}>
+        <h2 className="text-xl font-semibold">{formatJointName(motor.joint_name)}</h2>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <Badge variant="outline">CAN {motor.can_id}</Badge>
+          <Badge variant="secondary">{motor.mode}</Badge>
+          <Badge className={motor.online
+            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+            : 'bg-muted text-muted-foreground'
+          }>
             {motor.online ? 'Online' : 'Offline'}
-          </span>
-        </p>
+          </Badge>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <StatCard
           label="Position"
-          value={`${(motor.angle_rad * 180 / Math.PI).toFixed(1)}°`}
+          value={`${((motor.angle_rad * 180) / Math.PI).toFixed(1)}°`}
           sub={`${motor.angle_rad.toFixed(3)} rad`}
         />
         <StatCard
           label="Velocity"
-          value={`${motor.velocity_rads.toFixed(3)}`}
+          value={motor.velocity_rads.toFixed(3)}
           sub="rad/s"
         />
         <StatCard
           label="Torque"
-          value={`${motor.torque_nm.toFixed(3)}`}
+          value={motor.torque_nm.toFixed(3)}
           sub="N·m"
         />
         <StatCard
@@ -77,39 +94,41 @@ function MotorDetailPage() {
           dataKey="angle_rad"
           label="Position (rad)"
           unit="rad"
-          color="#3b82f6"
+          color="hsl(217, 91%, 60%)"
         />
         <TelemetryChart
           history={history}
           dataKey="velocity_rads"
           label="Velocity (rad/s)"
           unit="rad/s"
-          color="#10b981"
+          color="hsl(160, 84%, 39%)"
         />
         <TelemetryChart
           history={history}
           dataKey="torque_nm"
           label="Torque (N·m)"
           unit="N·m"
-          color="#f59e0b"
+          color="hsl(38, 92%, 50%)"
         />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <MotorControl canId={canId} currentAngleRad={motor.angle_rad} />
+        <MotorControl canId={canId} currentAngleRad={motor.angle_rad} limitsRad={limitsRad} />
 
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
-          <h3 className="text-sm font-medium text-zinc-400 mb-2">Faults</h3>
-          {!hasFaults ? (
-            <p className="text-sm text-emerald-400">No faults</p>
-          ) : (
-            <ul className="space-y-1">
-              {motor.faults.map((f, i) => (
-                <li key={i} className="text-sm text-red-400 font-mono">{f}</li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <Card>
+          <CardContent className="pt-4">
+            <h3 className="text-sm font-medium text-muted-foreground mb-2">Faults</h3>
+            {!hasFaults ? (
+              <p className="text-sm text-emerald-400">No faults</p>
+            ) : (
+              <ul className="space-y-1">
+                {motor.faults.map((f, i) => (
+                  <li key={i} className="text-sm text-destructive font-mono">{f}</li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   )
@@ -127,19 +146,21 @@ function StatCard({
   warn?: boolean
 }) {
   return (
-    <div className={`rounded-lg border bg-zinc-900 p-3 ${warn ? 'border-amber-500/50' : 'border-zinc-800'}`}>
-      <p className="text-xs text-zinc-500 mb-0.5">{label}</p>
-      <p className={`text-lg font-mono leading-tight ${warn ? 'text-amber-400' : 'text-zinc-100'}`}>
-        {value}
-      </p>
-      {sub && <p className="text-xs text-zinc-500">{sub}</p>}
-    </div>
+    <Card size="sm">
+      <CardContent>
+        <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
+        <p className={`text-lg font-mono leading-tight ${warn ? 'text-amber-400' : ''}`}>
+          {value}
+        </p>
+        {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
+      </CardContent>
+    </Card>
   )
 }
 
 function formatJointName(name: string): string {
   return name
     .split('_')
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ')
 }
