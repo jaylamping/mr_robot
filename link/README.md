@@ -1,19 +1,37 @@
+<div align="center">
+
 # Link
 
-The primary control interface for the humanoid robot. Link is a React web app served directly from the robot, providing real-time motor telemetry, arm coordination, and direct actuator control.
+**The primary control interface for the humanoid robot.**
+
+Real-time motor telemetry, arm coordination, and direct actuator control — served from the robot itself.
+
+[![React](https://img.shields.io/badge/React-19-61DAFB.svg?style=flat&logo=react&logoColor=white)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6.svg?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-8-646CFF.svg?style=flat&logo=vite&logoColor=white)](https://vite.dev/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4.svg?style=flat&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![TanStack Router](https://img.shields.io/badge/TanStack_Router-1.x-FF4154.svg?style=flat&logo=reactrouter&logoColor=white)](https://tanstack.com/router)
+[![shadcn/ui](https://img.shields.io/badge/shadcn/ui-latest-000000.svg?style=flat&logo=shadcnui&logoColor=white)](https://ui.shadcn.com/)
+[![Node](https://img.shields.io/badge/Node-24-5FA04E.svg?style=flat&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+
+</div>
+
+---
 
 ## Stack
 
-- **React 19** with TypeScript 5.9
-- **Vite 8** — build tooling and dev server
-- **TanStack Router** — file-based routing with auto code-splitting
-- **Tailwind CSS 4** — styling (via Vite plugin, no separate config)
-- **Zustand** — lightweight state management
-- **Recharts** — time-series telemetry charts
-- **shadcn/ui** (Base Nova style) — component primitives
-- **Lucide** — icons
-- **Sonner** — toast notifications
-- **Node v24** (see `.nvmrc`)
+| | Technology | Description |
+|---|---|---|
+| <img src="https://cdn.simpleicons.org/react/61DAFB" width="16" /> | **React 19** | UI framework |
+| <img src="https://cdn.simpleicons.org/typescript/3178C6" width="16" /> | **TypeScript 5.9** | Type-safe JavaScript |
+| <img src="https://cdn.simpleicons.org/vite/646CFF" width="16" /> | **Vite 8** | Build tooling and dev server |
+| <img src="https://cdn.simpleicons.org/tailwindcss/06B6D4" width="16" /> | **Tailwind CSS 4** | Utility-first styling (Vite plugin, no config file) |
+| <img src="https://cdn.simpleicons.org/reactrouter/CA4245" width="16" /> | **TanStack Router** | File-based routing with auto code-splitting |
+| <img src="https://cdn.simpleicons.org/shadcnui/000000" width="16" /> | **shadcn/ui** | Component primitives (Base Nova style) |
+| <img src="https://cdn.simpleicons.org/zustand/000000" width="16" /> | **Zustand** | Lightweight state management |
+| <img src="https://cdn.simpleicons.org/recharts/22B5BF" width="16" /> | **Recharts** | Time-series telemetry charts |
+| <img src="https://cdn.simpleicons.org/lucide/F56565" width="16" /> | **Lucide** | Icons |
+| <img src="https://cdn.simpleicons.org/nodedotjs/5FA04E" width="16" /> | **Node v24** | Runtime (see `.nvmrc`) |
 
 ## Getting Started
 
