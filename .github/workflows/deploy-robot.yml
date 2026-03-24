@@ -1,0 +1,97 @@
+name: Deploy Robot On Main
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-robot-main
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: CI Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust checks (workspace + socketcan path)
+        run: |
+          cargo check --workspace
+          cargo check -p link-server --features socketcan
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "23"
+          cache: npm
+          cache-dependency-path: link/package-lock.json
+
+      - name: Frontend build
+        working-directory: link
+        run: |
+          npm ci
+          npm run build
+
+  deploy:
+    name: Sync, Build, Restart On Robot
+    needs: ci
+    runs-on:
+      - self-hosted
+      - Linux
+      - ARM64
+      - robot
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "23"
+          cache: npm
+          cache-dependency-path: link/package-lock.json
+
+      - name: Sync workspace into deployment directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/mr_robot"
+          rsync -az --delete \
+            --exclude ".git/" \
+            --exclude "target/" \
+            --exclude "config/robot.yaml" \
+            ./ "$HOME/mr_robot/"
+
+      - name: Build Rust backend (release + socketcan)
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "$HOME/.cargo/env"
+          cd "$HOME/mr_robot"
+          cargo build --release --features socketcan
+
+      - name: Build Link frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$HOME/mr_robot/link"
+          npm ci
+          npm run build
+
+      - name: Restart and verify link service
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo systemctl restart link.service
+          systemctl is-active --quiet link.service
+          systemctl --no-pager --full status link.service | sed -n '1,30p'
