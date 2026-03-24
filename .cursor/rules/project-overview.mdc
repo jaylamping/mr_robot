@@ -49,6 +49,7 @@ alwaysApply: true
 - React 19, Vite, TypeScript, TanStack Router, Zustand, Recharts, Tailwind CSS 4
 - "Link" is the primary interaction layer with the robot, not just a dashboard
 - Pages: Overview, System, Arms, **Test** (motor controls + sequences), Settings, Logs
+- Overview page includes live Pi telemetry card (CPU usage, memory usage, and temperature when sensor is available)
 - Dev: `cargo run -p link-server --bin link -- --no-hardware` for mock telemetry, `cd link && npm run dev` for HMR
 - Production: `cd link && npm run build`, then `link` binary serves from `link/dist/`
 - Status: functional with test panel for remote motor control via browser
@@ -56,6 +57,7 @@ alwaysApply: true
 ## Deployment
 - **Windows dev:** COM5 for CAN2USB, `--no-hardware` for frontend-only dev
 - **Pi 5 (robot.local):** Ubuntu, SocketCAN via Waveshare 2-CH CAN HAT, systemd services (`can-setup.service` + `link.service`), Rust 1.94.0 installed. Build with `cargo build --release --features socketcan`. SSH: `joey@robot.local` (key auth, NOPASSWD sudo)
+- **GitHub Actions CD:** On push to `main`, workflow runs CI checks, then deploys to Pi via self-hosted runner (`robot-local`), syncs repo to `~/mr_robot` (preserving `config/robot.yaml`), rebuilds (`socketcan` + frontend), and restarts `link.service`
 
 ## Key Decisions Already Made
 - CAN2USB uses AT-framed serial: `'AT' [wire_id<<3|0x04, 4B BE] [len] [data] '\r\n'` at 921600 baud
@@ -67,6 +69,7 @@ alwaysApply: true
 - **MIT-style control only** — RS03 firmware rejects RunMode parameter writes; use ControlCommand frames (comm_type 1) with kp/kd/position/velocity/torque packed in a single frame
 - CAN2USB debugger DIP switch must be in position **2**
 - REST for commands, WebTransport datagrams for real-time telemetry (no WebSockets)
+- Telemetry snapshots now include host system metrics (`cpu_usage_percent`, `memory_used_mb`, `memory_total_mb`, optional `temperature_c`) sourced via `sysinfo`
 - Frontend served from the robot itself (not cloud-hosted)
 - Repo is a Cargo workspace — use `cortex::` for imports, not `robot::`
 - Transport selection via `config/robot.yaml` `bus.transport` field: `"ch341"` (Windows) or `"socketcan"` (Pi)

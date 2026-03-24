@@ -141,6 +141,7 @@ The `link/` directory is a React app — the primary interaction layer between t
 **Dev workflow:** `cargo run -p link-server --bin link -- --no-hardware` starts the server with mock telemetry on http://localhost:8080. Run `cd link && npm run dev` for Vite HMR on port 5173 (proxied to 8080). For production, `cd link && npm run build` then the `link` binary serves the built frontend from `link/dist/`.
 
 **Status:** Functional with Overview, System, Arms, Test, Settings, and Logs pages. Test Panel has motor selector, live telemetry readout, 5 control tabs (Jog/Spin/Torque/Position/Raw MIT), sequence runner, and global E-STOP. UI polish is ongoing.
+Overview now includes a live Pi telemetry card (CPU usage, memory usage, and temperature when available) from the backend telemetry stream.
 
 ## Deployment
 - **Windows dev:** COM5 for CAN2USB, `--no-hardware` for frontend-only development.
@@ -153,6 +154,7 @@ The `link/` directory is a React app — the primary interaction layer between t
   - **Build on Pi:** `cd ~/mr_robot && cargo build --release --features socketcan`
   - **To update on Pi:** `cd ~/mr_robot && git pull && cargo build --release --features socketcan && sudo systemctl restart link.service`
   - **Future:** Tailscale mesh VPN for remote access (not set up yet).
+ - **CI/CD:** GitHub Actions workflow `Deploy Robot On Main` runs on pushes to `main`: CI checks on GitHub-hosted runner, then deploy/build/restart on Pi using self-hosted runner `robot-local` (labels: `self-hosted`, `Linux`, `ARM64`, `robot`). Deployment sync excludes `config/robot.yaml` to preserve machine-local transport settings.
 
 ### Waveshare 2-CH CAN HAT — Pin Mapping (IMPORTANT)
 Default solder pads (verified against Waveshare wiki):
@@ -211,6 +213,16 @@ All under `/api` prefix (served by link-server):
 - `GET /api/status` — uptime, mode, motor count, transport type
 - `GET /api/cert-hash` — WebTransport certificate hash
 - `GET /api/logs` — recent log entries
+
+## Telemetry Snapshot Schema
+Realtime snapshots (WebTransport datagrams and `GET /api/telemetry` fallback) include:
+- `timestamp_ms`
+- `motors: MotorSnapshot[]`
+- `system`:
+  - `cpu_usage_percent`
+  - `memory_used_mb`
+  - `memory_total_mb`
+  - `temperature_c` (optional; may be unavailable on some hosts)
 
 ## Context File Maintenance
 This project keeps context in three places that MUST stay in sync:
