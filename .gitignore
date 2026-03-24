@@ -20,6 +20,9 @@ build/
 link/node_modules/
 link/dist/
 
+# TLS certificates (mkcert, self-signed)
+certs/
+
 # General
 *.log
 .env

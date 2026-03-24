@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -8,7 +9,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use base64::Engine;
 use clap::Parser;
 use tokio::sync::{broadcast, Mutex, RwLock};
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use wtransport::Identity;
@@ -45,6 +46,14 @@ struct Cli {
     /// Telemetry polling rate in Hz
     #[arg(long, default_value = "20")]
     telemetry_hz: u32,
+
+    /// Path to TLS certificate (PEM). Falls back to self-signed if missing.
+    #[arg(long, default_value = "certs/robot.pem")]
+    tls_cert: String,
+
+    /// Path to TLS private key (PEM). Falls back to self-signed if missing.
+    #[arg(long, default_value = "certs/robot-key.pem")]
+    tls_key: String,
 }
 
 #[tokio::main]
@@ -110,18 +119,29 @@ async fn main() -> Result<()> {
     };
     info!("WebTransport cert hash: {}", cert_hash_b64);
 
-    let cert_der: Vec<Vec<u8>> = identity
-        .certificate_chain()
-        .as_slice()
-        .iter()
-        .map(|c| c.der().to_vec())
-        .collect();
-    let key_der = identity.private_key().secret_der().to_vec();
     let wt_identity = identity.clone_identity();
 
-    let tls_config = RustlsConfig::from_der(cert_der, key_der)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to build TLS config: {}", e))?;
+    let tls_config = if Path::new(&cli.tls_cert).exists() && Path::new(&cli.tls_key).exists() {
+        info!("Loading TLS cert from {} and key from {}", cli.tls_cert, cli.tls_key);
+        RustlsConfig::from_pem_file(&cli.tls_cert, &cli.tls_key)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to load TLS PEM files: {}", e))?
+    } else {
+        warn!(
+            "TLS cert/key not found at {}, {}; using self-signed (browser will show 'Not Secure')",
+            cli.tls_cert, cli.tls_key
+        );
+        let cert_der: Vec<Vec<u8>> = identity
+            .certificate_chain()
+            .as_slice()
+            .iter()
+            .map(|c| c.der().to_vec())
+            .collect();
+        let key_der = identity.private_key().secret_der().to_vec();
+        RustlsConfig::from_der(cert_der, key_der)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to build TLS config: {}", e))?
+    };
 
     let mode = if cli.no_hardware {
         "mock".to_string()
