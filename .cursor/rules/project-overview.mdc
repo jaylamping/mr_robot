@@ -57,6 +57,7 @@ alwaysApply: true
 ## Deployment
 - **Windows dev:** COM5 for CAN2USB, `--no-hardware` for frontend-only dev
 - **Pi 5 (robot.local):** Ubuntu, SocketCAN via Waveshare 2-CH CAN HAT, systemd services (`can-setup.service` + `link.service`), Rust 1.94.0 installed. Build with `cargo build --release --features socketcan`. SSH: `joey@robot.local` (key auth, NOPASSWD sudo)
+- **HTTPS (Tailscale):** Enable MagicDNS + HTTPS Certificates in Tailscale admin DNS; on Pi run `deploy/renew-tailscale-cert.sh` → `certs/robot.pem` + `certs/robot-key.pem` for trusted TLS in the browser (`deploy/tailscale-https.md`). Re-run before ~90d expiry.
 - **GitHub Actions CD:** On push to `main`, workflow runs CI checks, then deploys to Pi via self-hosted runner (`robot-local`), syncs repo to `~/mr_robot` (preserving `config/robot.yaml`), rebuilds (`socketcan` + frontend), installs `deploy/link.service` to systemd, and restarts `link.service`
 
 ## Key Decisions Already Made

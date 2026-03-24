@@ -154,7 +154,7 @@ Overview now includes a live Pi telemetry card (CPU usage, memory usage, and tem
   - **Repo path on Pi:** `/home/joey/mr_robot` (cloned from GitHub). Pi's `config/robot.yaml` has `transport: socketcan` (local edit, not committed).
   - **Build on Pi:** `cd ~/mr_robot && cargo build --release --features socketcan`
   - **To update on Pi:** `cd ~/mr_robot && git pull && cargo build --release --features socketcan && sudo systemctl restart link.service`
-  - **Future:** Tailscale mesh VPN for remote access (not set up yet).
+  - **HTTPS (Tailscale):** In the [Tailscale admin DNS](https://login.tailscale.com/admin/dns), enable MagicDNS and **HTTPS Certificates**. On the Pi, run `deploy/renew-tailscale-cert.sh` to write Let’s Encrypt certs to `certs/robot.pem` / `certs/robot-key.pem` (navi loads them; default paths). Open Link at `https://<machine>.<tailnet>.ts.net:8080` from another tailnet device. Re-run the script periodically (~90 day cert lifetime). Details: `deploy/tailscale-https.md`. WebTransport continues to use the built-in identity plus `/api/cert-hash` pinning.
  - **CI/CD:** GitHub Actions workflow `Deploy Robot On Main` runs on pushes to `main`: CI checks on GitHub-hosted runner, then deploy/build/restart on Pi using self-hosted runner `robot-local` (labels: `self-hosted`, `Linux`, `ARM64`, `robot`). Deployment sync excludes `config/robot.yaml` to preserve machine-local transport settings.
 
 ### Waveshare 2-CH CAN HAT — Pin Mapping (IMPORTANT)
