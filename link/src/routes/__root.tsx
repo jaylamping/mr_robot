@@ -46,8 +46,10 @@ function RootLayout() {
       {/* Mobile sidebar */}
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <div className="flex h-12 items-center border-b px-3 md:hidden">
-          <SheetTrigger render={<Button variant="ghost" size="icon" />}>
-            <LuMenu className="size-5" />
+          <SheetTrigger>
+            <Button variant="ghost" size="icon">
+              <LuMenu className="size-5" />
+            </Button>
           </SheetTrigger>
           <span className="ml-2 text-sm font-semibold">Link</span>
         </div>

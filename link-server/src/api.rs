@@ -146,6 +146,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/sequences", get(list_sequences))
         .route("/sequences/{name}/run", post(run_sequence))
         .route("/discover", post(discover_motors))
+        .route("/telemetry", get(get_telemetry))
         .route("/logs", get(get_logs))
 }
 
@@ -186,6 +187,16 @@ async fn get_cert_hash(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         hash_b64: state.cert_hash_b64.clone(),
         port: state.wt_port,
     })
+}
+
+async fn get_telemetry(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let mut rx = state.telemetry_tx.subscribe();
+    match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+        Ok(Ok(snapshot)) => Json(serde_json::to_value(snapshot).unwrap()).into_response(),
+        _ => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
 }
 
 async fn get_motors(State(state): State<Arc<AppState>>) -> impl IntoResponse {

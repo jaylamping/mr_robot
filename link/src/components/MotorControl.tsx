@@ -224,8 +224,10 @@ function ConfirmButton({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button variant={variant} disabled={disabled} />}>
-        {label}
+      <DialogTrigger>
+        <Button variant={variant} disabled={disabled}>
+          {label}
+        </Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
