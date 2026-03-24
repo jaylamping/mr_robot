@@ -147,9 +147,11 @@ The `link/` directory is a React app — the primary interaction layer between t
 - **Pi 5 (robot.local):** Raspberry Pi 5, Ubuntu (kernel 6.17), hostname `robot.local`, user `joey`, NOPASSWD sudo. SSH key auth configured from dev machine.
   - **CAN HAT:** Waveshare 2-CH Isolated CAN HAT — MCP2515 overlays in `/boot/firmware/config.txt` (INT_0=GPIO23, INT_1=GPIO25, oscillator=16MHz). Both `can0` and `can1` detected.
   - **`can-setup.service`:** systemd oneshot, brings up `can0` at 1 Mbps on boot. Enabled.
-  - **`link.service`:** systemd service, runs `link --config config/robot.yaml` as user `joey` from `/home/joey/mr_robot`. Depends on `can-setup.service`. Enabled, but repo not yet cloned/built on Pi.
+  - **`link.service`:** systemd service, runs `link --config config/robot.yaml` as user `joey` from `/home/joey/mr_robot`. Depends on `can-setup.service`. Enabled and running.
   - **Rust:** 1.94.0 installed via rustup, build-essential + pkg-config installed.
-  - **Build on Pi:** `cargo build --release --features socketcan` from the repo root.
+  - **Repo path on Pi:** `/home/joey/mr_robot` (cloned from GitHub). Pi's `config/robot.yaml` has `transport: socketcan` (local edit, not committed).
+  - **Build on Pi:** `cd ~/mr_robot && cargo build --release --features socketcan`
+  - **To update on Pi:** `cd ~/mr_robot && git pull && cargo build --release --features socketcan && sudo systemctl restart link.service`
   - **Future:** Tailscale mesh VPN for remote access (not set up yet).
 
 ### Waveshare 2-CH CAN HAT — Pin Mapping (IMPORTANT)
