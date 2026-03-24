@@ -197,7 +197,7 @@ async fn get_telemetry(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let mut rx = state.telemetry_tx.subscribe();
-    match tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await {
+    match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
         Ok(Ok(snapshot)) => Json(serde_json::to_value(snapshot).unwrap()).into_response(),
         _ => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }

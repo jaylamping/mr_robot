@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
         info!("--no-hardware: running with mock telemetry");
     }
 
-    let identity = Identity::self_signed(["localhost", "127.0.0.1"])
+    let identity = Identity::self_signed(["localhost", "127.0.0.1", "robot.local"])
         .map_err(|e| anyhow::anyhow!("failed to generate self-signed cert: {}", e))?;
 
     let cert_hash_b64 = {
