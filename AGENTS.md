@@ -53,6 +53,7 @@ navi/                  Web server + telemetry (axum, WebTransport); pairs with `
     api.rs             REST API endpoints (/api/config, /api/motors, etc.)
     telemetry.rs       Motor polling loop + WebTransport datagram streaming
 link/                  React frontend (Vite + TanStack Router + Tailwind)
+deploy/link.service    Pi systemd unit (Navi binary); copied by deploy workflow
 config/robot.yaml      CAN IDs, joint limits, physical parameters
 robstride-local/       Patched robstride crate (socketcan optional)
 ```
@@ -148,7 +149,7 @@ Overview now includes a live Pi telemetry card (CPU usage, memory usage, and tem
 - **Pi 5 (robot.local):** Raspberry Pi 5, Ubuntu (kernel 6.17), hostname `robot.local`, user `joey`, NOPASSWD sudo. SSH key auth configured from dev machine.
   - **CAN HAT:** Waveshare 2-CH Isolated CAN HAT — MCP2515 overlays in `/boot/firmware/config.txt` (INT_0=GPIO23, INT_1=GPIO25, oscillator=16MHz). Both `can0` and `can1` detected.
   - **`can-setup.service`:** systemd oneshot, brings up `can0` at 1 Mbps on boot. Enabled.
-  - **`link.service`:** systemd service, runs `navi --config config/robot.yaml` as user `joey` from `/home/joey/mr_robot` (update `ExecStart` to `target/release/navi`). Depends on `can-setup.service`. Enabled and running.
+  - **`link.service`:** systemd unit is versioned in-repo at `deploy/link.service` (`ExecStart` → `target/release/navi`). Deploy workflow copies it to `/etc/systemd/system/link.service` and reloads systemd before each restart. Depends on `can-setup.service`. Enabled and running.
   - **Rust:** 1.94.0 installed via rustup, build-essential + pkg-config installed.
   - **Repo path on Pi:** `/home/joey/mr_robot` (cloned from GitHub). Pi's `config/robot.yaml` has `transport: socketcan` (local edit, not committed).
   - **Build on Pi:** `cd ~/mr_robot && cargo build --release --features socketcan`

@@ -88,10 +88,12 @@ jobs:
           npm ci
           npm run build
 
-      - name: Restart and verify link service
+      - name: Install systemd unit and restart link service
         shell: bash
         run: |
           set -euo pipefail
+          sudo cp "$HOME/mr_robot/deploy/link.service" /etc/systemd/system/link.service
+          sudo systemctl daemon-reload
           sudo systemctl restart link.service
           systemctl is-active --quiet link.service
           systemctl --no-pager --full status link.service | sed -n '1,30p'

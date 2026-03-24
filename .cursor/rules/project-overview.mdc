@@ -57,7 +57,7 @@ alwaysApply: true
 ## Deployment
 - **Windows dev:** COM5 for CAN2USB, `--no-hardware` for frontend-only dev
 - **Pi 5 (robot.local):** Ubuntu, SocketCAN via Waveshare 2-CH CAN HAT, systemd services (`can-setup.service` + `link.service`), Rust 1.94.0 installed. Build with `cargo build --release --features socketcan`. SSH: `joey@robot.local` (key auth, NOPASSWD sudo)
-- **GitHub Actions CD:** On push to `main`, workflow runs CI checks, then deploys to Pi via self-hosted runner (`robot-local`), syncs repo to `~/mr_robot` (preserving `config/robot.yaml`), rebuilds (`socketcan` + frontend), and restarts `link.service`
+- **GitHub Actions CD:** On push to `main`, workflow runs CI checks, then deploys to Pi via self-hosted runner (`robot-local`), syncs repo to `~/mr_robot` (preserving `config/robot.yaml`), rebuilds (`socketcan` + frontend), installs `deploy/link.service` to systemd, and restarts `link.service`
 
 ## Key Decisions Already Made
 - CAN2USB uses AT-framed serial: `'AT' [wire_id<<3|0x04, 4B BE] [len] [data] '\r\n'` at 921600 baud

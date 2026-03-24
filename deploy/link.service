@@ -1,0 +1,15 @@
+[Unit]
+Description=Navi — Link UI backend (REST + WebTransport)
+After=network-online.target can-setup.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=joey
+WorkingDirectory=/home/joey/mr_robot
+ExecStart=/home/joey/mr_robot/target/release/navi --config /home/joey/mr_robot/config/robot.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
