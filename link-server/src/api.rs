@@ -196,10 +196,10 @@ async fn get_cert_hash(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 async fn get_telemetry(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let mut rx = state.telemetry_tx.subscribe();
-    match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
-        Ok(Ok(snapshot)) => Json(serde_json::to_value(snapshot).unwrap()).into_response(),
-        _ => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    let cached = state.latest_telemetry.read().await;
+    match cached.as_ref() {
+        Some(snapshot) => Json(serde_json::to_value(snapshot).unwrap()).into_response(),
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
 

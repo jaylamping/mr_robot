@@ -119,6 +119,7 @@ async fn main() -> Result<()> {
         arms: Mutex::new(arms),
         protocol: protocol_arc,
         telemetry_tx,
+        latest_telemetry: RwLock::new(None),
         cert_hash_b64,
         wt_port: cli.wt_port,
         start_time: Instant::now(),

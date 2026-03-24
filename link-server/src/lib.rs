@@ -26,6 +26,7 @@ pub struct AppState {
     pub arms: Mutex<HashMap<String, Arm>>,
     pub protocol: Option<Arc<Mutex<Protocol>>>,
     pub telemetry_tx: broadcast::Sender<TelemetrySnapshot>,
+    pub latest_telemetry: RwLock<Option<TelemetrySnapshot>>,
     pub cert_hash_b64: String,
     pub wt_port: u16,
     pub start_time: Instant,

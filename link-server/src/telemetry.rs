@@ -39,6 +39,8 @@ pub async fn telemetry_loop(state: Arc<AppState>, rate_hz: u32, mock: bool) {
             build_live_snapshot(&state, start.elapsed().as_millis() as u64).await
         };
 
+        *state.latest_telemetry.write().await = Some(snapshot.clone());
+
         if state.telemetry_tx.send(snapshot).is_err() {
             debug!("no telemetry subscribers");
         }

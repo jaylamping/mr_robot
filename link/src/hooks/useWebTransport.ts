@@ -15,7 +15,7 @@ function base64ToArrayBuffer(b64: string): ArrayBuffer {
   return bytes.buffer
 }
 
-const REST_POLL_INTERVAL_MS = 100
+const REST_POLL_INTERVAL_MS = 500
 
 export function useWebTransport() {
   const transportRef = useRef<WebTransport | null>(null)
