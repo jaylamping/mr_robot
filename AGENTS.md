@@ -10,10 +10,15 @@
 
 ## Hardware
 - **Actuators:** RobStride RS03 (60 N·m peak, 50 rad/s, 9:1, 880g, 48V). OpenQDD for waist.
-- **CAN adapter:** RobStride CAN2USB debugger — CH340 chip (VID:PID 1A86:7523), COM5, 921600 baud.
+- **CAN adapters:**
+  - **Windows dev:** RobStride CAN2USB debugger — CH340 chip (VID:PID 1A86:7523), COM5, 921600 baud.
+  - **Pi 5 deployment:** Waveshare 2-CH Isolated CAN Bus Expansion HAT — dual MCP2515 + SI65HVD230, SPI-based, SocketCAN.
 - **Power:** 24V/1200W bench PSU (48V battery later).
-- **CAN:** 1 Mbps standard CAN for RS03s. Separate CAN-FD bus for Moteus (mjcanfd-usb).
+- **CAN buses:**
+  - Bus 0 (`can0`): Standard CAN at 1 Mbps — RS03 actuators (arms, shoulders, elbows).
+  - Bus 1 (`can1`): CAN-FD — Moteus controllers (future, not wired yet).
 - **Torso:** 460×200×160mm, 2020 extrusion, Mankk corner brackets.
+- **Onboard computer:** Raspberry Pi 5 (8GB), Ubuntu, hostname `robot.local`, user `joey`.
 
 ## CAN2USB Serial Protocol (CRITICAL)
 The CAN2USB debugger does NOT speak SLCAN or robotell. It uses a proprietary AT-framed binary protocol I reverse-engineered:
@@ -53,9 +58,9 @@ robstride-local/       Patched robstride crate (socketcan optional)
 ```
 
 ### Key Crate Dependencies
-- `cortex` — our motor control crate (motor, arm, config). Import as `use cortex::motor::Motor` etc.
-- `link-server` — our web/telemetry crate. The `link` binary lives here.
-- `robstride` (v0.3.6, **local patch** in `robstride-local/`) — RS03 CAN protocol, CH341Transport (AT serial), multi-motor Supervisor. Patched to make `socketcan` optional (Linux-only; fails to build on Windows otherwise).
+- `cortex` — our motor control crate (motor, arm, config). Import as `use cortex::motor::Motor` etc. Has `socketcan` feature flag.
+- `link-server` — our web/telemetry crate. The `link` binary lives here. Has `socketcan` feature flag (passes through to cortex).
+- `robstride` (v0.3.6, **local patch** in `robstride-local/`) — RS03 CAN protocol, CH341Transport (AT serial), SocketCanTransport (Linux), multi-motor Supervisor. Patched to make `socketcan` optional (Linux-only; fails to build on Windows otherwise).
 - `tokio` — async runtime (required by robstride's async Transport trait)
 - `serde` + `serde_yaml` — typed config deserialization
 - `tracing` + `tracing-subscriber` — structured logging
@@ -63,6 +68,20 @@ robstride-local/       Patched robstride crate (socketcan optional)
 - `axum` + `tower-http` — HTTP server and middleware (in link-server)
 - `wtransport` — WebTransport/QUIC for real-time telemetry datagrams (in link-server)
 - `clap` — CLI argument parsing (in link-server)
+
+### Transport Architecture
+The `cortex::motor::create_protocol(bus: &BusConfig)` factory dispatches based on `bus.transport`:
+- `"ch341"` (default) → `CH341Transport` via serial AT-framed protocol (Windows/USB)
+- `"socketcan"` → `SocketCanTransport` via Linux SocketCAN (Pi 5/HAT) — requires `socketcan` feature
+
+**Feature flag chain:** `link-server/socketcan` → `cortex/socketcan` → `robstride/socketcan`
+- **Windows build:** `cargo build` (no socketcan feature, uses CH341)
+- **Pi build:** `cargo build --features socketcan`
+
+**robstride-local type names (verified):**
+- `TransportType::SocketCAN(SocketCanTransport)` — uppercase "CAN"
+- `SocketCanTransport::new(interface_name: String)` — takes owned String
+- Re-export: `robstride::SocketCanTransport` behind `#[cfg(feature = "socketcan")]`
 
 ### Patched robstride crate (IMPORTANT)
 The upstream `robstride` crate (crates.io) has a hard dependency on `socketcan` which only compiles on Linux. This project maintains a local patched copy at `robstride-local/` with socketcan behind an optional feature flag. The `actuator` module is also made `pub` for access to `TypedFeedbackData` and `TypedCommandData`. Additional patch: removed the broken RunMode special-case in `WriteCommand::to_command` and `ReadCommand::data_as_f32` (upstream encoded RunMode as raw u8 bytes instead of f32, causing silent write failures). If upgrading the robstride crate, re-apply these patches.
@@ -100,6 +119,8 @@ Development defaults: kp=30, kd=1 for position hold. Start soft (kp=5, kd=0.5) w
 - Speed limit < 10 rad/s and torque limit < 30 N·m during development
 - **Do NOT use RunMode parameter writes** — they are silently rejected by our RS03 firmware
 - CAN2USB debugger DIP switch must be in position **2** (position 1 causes hangs)
+- `config/robot.yaml` has `bus.transport` field (`"ch341"` or `"socketcan"`) and `bus.socketcan_interface` (e.g. `"can0"`)
+- The `link` binary accepts `--config <path>` to override the default `config/robot.yaml` path
 
 ## Link Frontend (React)
 The `link/` directory is a React app — the primary interaction layer between the user and the robot (not just a "dashboard").
@@ -109,28 +130,85 @@ The `link/` directory is a React app — the primary interaction layer between t
 **Key files:**
 - `link/src/routes/index.tsx` — home page, motor card grid
 - `link/src/routes/motor.$id.tsx` — per-motor detail/control page
+- `link/src/routes/test.tsx` — test panel: motor jog/spin/torque controls, sequence runner, global E-STOP
 - `link/src/components/MotorCard.tsx` — motor status card
 - `link/src/components/MotorControl.tsx` — enable/disable/move/control panel
 - `link/src/components/TelemetryChart.tsx` — real-time time-series plot
 - `link/src/stores/telemetry.ts` — Zustand store for WebTransport telemetry
 - `link/src/hooks/useWebTransport.ts` — WebTransport connection hook
-- `link/src/lib/api.ts` — REST API client functions
+- `link/src/lib/api.ts` — REST API client functions (motor CRUD + spin/torque/jog/stop/estop + sequences)
 
 **Dev workflow:** `cargo run -p link-server --bin link -- --no-hardware` starts the server with mock telemetry on http://localhost:8080. Run `cd link && npm run dev` for Vite HMR on port 5173 (proxied to 8080). For production, `cd link && npm run build` then the `link` binary serves the built frontend from `link/dist/`.
 
-**Status:** Scaffolded and functional but UI is bare — motor cards, telemetry chart, and control panel exist but need polish. This is the current active work area.
+**Status:** Functional with Overview, System, Arms, Test, Settings, and Logs pages. Test Panel has motor selector, live telemetry readout, 5 control tabs (Jog/Spin/Torque/Position/Raw MIT), sequence runner, and global E-STOP. UI polish is ongoing.
 
 ## Deployment
-- **Current:** Everything runs on the Windows dev machine (COM5 for CAN2USB). Use `--no-hardware` for frontend-only development.
-- **Future:** Raspberry Pi 5 on the robot, running Ubuntu with SocketCAN. The `robstride-local` crate already has the `socketcan` feature flag ready. Mesh VPN (Tailscale) planned for remote access. Pi is NOT set up yet — not a blocker for current work.
+- **Windows dev:** COM5 for CAN2USB, `--no-hardware` for frontend-only development.
+- **Pi 5 (robot.local):** Raspberry Pi 5, Ubuntu (kernel 6.17), hostname `robot.local`, user `joey`, NOPASSWD sudo. SSH key auth configured from dev machine.
+  - **CAN HAT:** Waveshare 2-CH Isolated CAN HAT — MCP2515 overlays in `/boot/firmware/config.txt` (INT_0=GPIO23, INT_1=GPIO25, oscillator=16MHz). Both `can0` and `can1` detected.
+  - **`can-setup.service`:** systemd oneshot, brings up `can0` at 1 Mbps on boot. Enabled.
+  - **`link.service`:** systemd service, runs `link --config config/robot.yaml` as user `joey` from `/home/joey/mr_robot`. Depends on `can-setup.service`. Enabled, but repo not yet cloned/built on Pi.
+  - **Rust:** 1.94.0 installed via rustup, build-essential + pkg-config installed.
+  - **Build on Pi:** `cargo build --release --features socketcan` from the repo root.
+  - **Future:** Tailscale mesh VPN for remote access (not set up yet).
+
+### Waveshare 2-CH CAN HAT — Pin Mapping (IMPORTANT)
+Default solder pads (verified against Waveshare wiki):
+- CAN_0: CS=CE0 (GPIO8), INT=**GPIO23** (not GPIO25 as some docs suggest)
+- CAN_1: CS=CE1 (GPIO7), INT=**GPIO25** (not GPIO24)
+- Oscillator: **16 MHz** (check HAT revision — some use 8 MHz)
+- Config overlay order matters: `mcp2515-can1` first, then `mcp2515-can0`
 
 ## Config
-All hardware params (CAN IDs, joint limits, COM ports) live in `config/robot.yaml`. Joint limits in radians. `null` CAN ID = not yet assigned. Loaded via `serde_yaml` into typed Rust structs.
+All hardware params (CAN IDs, joint limits, COM ports, transport selection) live in `config/robot.yaml`. Joint limits in radians. `null` CAN ID = not yet assigned. Loaded via `serde_yaml` into typed Rust structs.
+
+Key `bus:` fields:
+- `transport`: `"ch341"` (default) or `"socketcan"`
+- `port`: COM port for CH341 (e.g. `COM5`) — ignored when transport is socketcan
+- `socketcan_interface`: SocketCAN interface name (e.g. `"can0"`) — ignored when transport is ch341
+- `baud`, `can_bitrate`, `host_id`: shared across transports
+
+The `link` binary accepts `--config <path>` (default `config/robot.yaml`) so the Pi can use a local config with `transport: socketcan` without modifying the repo's config.
 
 ## Rust Environment
-- Rust stable toolchain (MSVC target on Windows, will also target aarch64-linux for Pi)
+- Rust stable toolchain (MSVC target on Windows, aarch64-unknown-linux-gnu on Pi)
 - Build: `cargo build`, `cargo run -p cortex --bin probe`, `cargo run -p link-server --bin link`, etc.
+- Build with SocketCAN (Pi only): `cargo build --features socketcan`
 - Dependencies managed via workspace `Cargo.toml` + per-crate `Cargo.toml`
+
+## REST API Endpoints
+All under `/api` prefix (served by link-server):
+
+**Motor commands:**
+- `GET /api/motors` — list all motors
+- `GET /api/motors/{id}` — motor detail with live state
+- `POST /api/motors/{id}/enable` — enable motor
+- `POST /api/motors/{id}/disable` — disable motor
+- `POST /api/motors/{id}/zero` — set encoder zero
+- `POST /api/motors/{id}/move` — position move `{ position_rad, kp?, kd? }`
+- `POST /api/motors/{id}/control` — raw MIT control `{ position, velocity, kp, kd, torque }`
+- `POST /api/motors/{id}/spin` — velocity control `{ velocity_rads, kd? }`
+- `POST /api/motors/{id}/torque` — torque control `{ torque_nm }`
+- `POST /api/motors/{id}/jog` — relative position move `{ delta_deg, kp?, kd? }`
+- `POST /api/motors/{id}/stop` — emergency stop (disable) single motor
+- `POST /api/estop` — emergency stop ALL motors
+
+**Arm commands:**
+- `GET /api/arms` — list arms with joint info
+- `POST /api/arms/{side}/enable` — enable all joints
+- `POST /api/arms/{side}/disable` — disable all joints
+- `POST /api/arms/{side}/home` — startup safe recovery
+- `POST /api/arms/{side}/pose` — set joint positions `{ joints: {name: rad}, kp?, kd? }`
+
+**Sequences:**
+- `GET /api/sequences` — list available sequences
+- `POST /api/sequences/{name}/run` — run a sequence (wave, home_all, sweep_test)
+
+**Other:**
+- `GET /api/config` — full robot config
+- `GET /api/status` — uptime, mode, motor count, transport type
+- `GET /api/cert-hash` — WebTransport certificate hash
+- `GET /api/logs` — recent log entries
 
 ## Context File Maintenance
 This project keeps context in three places that MUST stay in sync:

@@ -16,15 +16,18 @@ alwaysApply: true
 ## Hardware Stack
 - **Arm actuators:** RobStride RS03 (CAN ID 127 is the first motor, IDs TBD for rest)
 - **Waist:** OpenQDD actuator
-- **CAN adapter:** RobStride CAN2USB debugger (CH340, COM5, 921600 baud)
+- **CAN adapters:**
+  - Windows dev: RobStride CAN2USB debugger (CH340, COM5, 921600 baud)
+  - Pi 5: Waveshare 2-CH Isolated CAN HAT (MCP2515 + SI65HVD230, SPI/SocketCAN)
 - **Power:** 24V/1200W bench PSU (upgrading to 48V battery for mobile)
-- **CAN buses:** Standard CAN at 1 Mbps for RS03s, CAN-FD for Moteus controllers (mjcanfd-usb)
+- **CAN buses:** Bus 0 (can0): Standard CAN 1 Mbps for RS03s. Bus 1 (can1): CAN-FD for Moteus (future)
 - **Torso:** 460×200×160mm, 2020 extrusion with Mankk corner brackets
+- **Onboard computer:** Raspberry Pi 5 (8GB), Ubuntu, hostname `robot.local`, user `joey`
 
 ## Software Stack
-- **Language:** Rust (stable toolchain, MSVC target on Windows)
-- **Workspace:** Cargo workspace at repo root with two crates: `cortex` and `link-server`
-- **Key crate:** `robstride` (v0.3+, local patch at `robstride-local/`) — CH341Transport for CAN2USB, RS03 protocol, async API
+- **Language:** Rust (stable toolchain, MSVC on Windows, aarch64-linux on Pi)
+- **Workspace:** Cargo workspace at repo root with two crates: `cortex` and `link-server` (both have `socketcan` feature flag)
+- **Key crate:** `robstride` (v0.3+, local patch at `robstride-local/`) — CH341Transport for CAN2USB, SocketCanTransport for Pi, RS03 protocol, async API
 - **Runtime:** tokio (async, required by robstride Transport trait)
 - **Config:** `serde` + `serde_yaml` for `config/robot.yaml`
 - **`cortex/`** — motor control, arm coordination, config (the "brain stem")
@@ -35,22 +38,24 @@ alwaysApply: true
   - `cortex/src/bin/motor_repl.rs` — interactive motor REPL for testing/tuning
   - `cortex/src/bin/wave_demo.rs` — arm wave demo (Phase 1 milestone)
 - **`link-server/`** — web server and telemetry (axum + WebTransport)
-  - `link-server/src/main.rs` — `link` binary entry point
-  - `link-server/src/api.rs` — REST API endpoints
+  - `link-server/src/main.rs` — `link` binary entry point (`--config`, `--no-hardware`, `--port`, `--wt-port`)
+  - `link-server/src/api.rs` — REST API endpoints (motor CRUD, spin/torque/jog/stop/estop, arms, sequences)
   - `link-server/src/telemetry.rs` — motor polling + WebTransport datagram streaming
 - **`link/`** — React frontend (Vite + TanStack Router + Tailwind)
-- Config lives in `config/robot.yaml`
+  - Test Panel (`link/src/routes/test.tsx`) — motor jog/spin/torque/position/raw controls, sequence runner, global E-STOP
+- Config lives in `config/robot.yaml` (transport: ch341 or socketcan)
 
 ## Link Frontend
 - React 19, Vite, TypeScript, TanStack Router, Zustand, Recharts, Tailwind CSS 4
 - "Link" is the primary interaction layer with the robot, not just a dashboard
+- Pages: Overview, System, Arms, **Test** (motor controls + sequences), Settings, Logs
 - Dev: `cargo run -p link-server --bin link -- --no-hardware` for mock telemetry, `cd link && npm run dev` for HMR
 - Production: `cd link && npm run build`, then `link` binary serves from `link/dist/`
-- Status: scaffolded and functional but UI needs polish — active work area
+- Status: functional with test panel for remote motor control via browser
 
 ## Deployment
-- Current: Windows dev machine (COM5), `--no-hardware` for frontend-only dev
-- Future: Raspberry Pi 5, Ubuntu, SocketCAN, Tailscale for remote access (NOT set up yet)
+- **Windows dev:** COM5 for CAN2USB, `--no-hardware` for frontend-only dev
+- **Pi 5 (robot.local):** Ubuntu, SocketCAN via Waveshare 2-CH CAN HAT, systemd services (`can-setup.service` + `link.service`), Rust 1.94.0 installed. Build with `cargo build --release --features socketcan`. SSH: `joey@robot.local` (key auth, NOPASSWD sudo)
 
 ## Key Decisions Already Made
 - CAN2USB uses AT-framed serial: `'AT' [wire_id<<3|0x04, 4B BE] [len] [data] '\r\n'` at 921600 baud
@@ -64,3 +69,6 @@ alwaysApply: true
 - REST for commands, WebTransport datagrams for real-time telemetry (no WebSockets)
 - Frontend served from the robot itself (not cloud-hosted)
 - Repo is a Cargo workspace — use `cortex::` for imports, not `robot::`
+- Transport selection via `config/robot.yaml` `bus.transport` field: `"ch341"` (Windows) or `"socketcan"` (Pi)
+- `link` binary accepts `--config <path>` for deployment-specific config
+- Waveshare CAN HAT interrupt pins: CAN_0=GPIO23, CAN_1=GPIO25 (verified from wiki, NOT GPIO25/24 as some docs say)

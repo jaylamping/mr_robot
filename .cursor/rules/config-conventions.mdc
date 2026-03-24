@@ -6,8 +6,19 @@ alwaysApply: false
 
 # Config Conventions
 
-All hardware parameters (CAN IDs, joint limits, gear ratios, COM ports) live in `config/robot.yaml`. Code should read from config rather than hardcoding values.
+All hardware parameters (CAN IDs, joint limits, gear ratios, COM ports, transport selection) live in `config/robot.yaml`. Code should read from config rather than hardcoding values.
 
 Joint limits are in radians. CAN IDs set to `null` mean "not yet assigned."
 
-Config is loaded via `serde_yaml` into typed Rust structs defined in `src/config.rs`.
+Config is loaded via `serde_yaml` into typed Rust structs defined in `cortex/src/config.rs`.
+
+## Transport Selection
+The `bus:` section has a `transport` field (`"ch341"` or `"socketcan"`, default `"ch341"`) and `socketcan_interface` (e.g. `"can0"`). The `link` binary accepts `--config <path>` to override the default config path, so the Pi deployment can use a local config with `transport: socketcan` without modifying the repo's config.
+
+## BusConfig Fields
+- `transport`: `"ch341"` (default via serde) or `"socketcan"`
+- `port`: COM port for CH341 (e.g. `COM5`)
+- `socketcan_interface`: optional, SocketCAN interface name (e.g. `"can0"`)
+- `baud`: serial baud rate (921600)
+- `can_bitrate`: CAN bus bitrate (1000000)
+- `host_id`: host CAN ID (0xAA)
