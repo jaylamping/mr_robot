@@ -1,12 +1,27 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { getArms, enableArm, disableArm, homeArm, setArmPose, type ArmInfo, type CommandResponse } from '@/lib/api'
+import {
+  getArms,
+  enableArm,
+  disableArm,
+  homeArm,
+  setArmPose,
+  getArmPreflight,
+  updateJointLimits,
+  updateJointHome,
+  type ArmInfo,
+  type CommandResponse,
+  type HomeResponse,
+  type PreflightResult,
+} from '@/lib/api'
 import { useTelemetryStore } from '@/stores/telemetry'
 import { PoseEditor } from '@/components/PoseEditor'
+import { PreflightAlert } from '@/components/PreflightAlert'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { Slider } from '@/components/ui/slider'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -18,7 +33,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { LuPower, LuPowerOff, LuHouse } from 'react-icons/lu'
+import { LuPower, LuPowerOff, LuHouse, LuSettings, LuSave, LuCrosshair, LuChevronDown, LuChevronRight } from 'react-icons/lu'
 
 export const Route = createFileRoute('/arms')({
   component: ArmsPage,
@@ -29,11 +44,10 @@ function ArmsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const refreshArms = () => getArms().then(setArms).catch((e) => setError(e.message))
+
   useEffect(() => {
-    getArms()
-      .then(setArms)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false))
+    refreshArms().finally(() => setLoading(false))
   }, [])
 
   if (loading) {
@@ -68,19 +82,29 @@ function ArmsPage() {
       <h2 className="text-xl font-semibold mb-6">Arm Control</h2>
       <div className="space-y-6">
         {arms.map((arm) => (
-          <ArmPanel key={arm.side} arm={arm} />
+          <ArmPanel key={arm.side} arm={arm} onRefresh={refreshArms} />
         ))}
       </div>
     </div>
   )
 }
 
-function ArmPanel({ arm }: { arm: ArmInfo }) {
+function ArmPanel({ arm, onRefresh }: { arm: ArmInfo; onRefresh: () => void }) {
   const [busy, setBusy] = useState(false)
+  const [preflight, setPreflight] = useState<PreflightResult | null>(null)
+  const [homeResult, setHomeResult] = useState<HomeResponse | null>(null)
   const motors = useTelemetryStore((s) => s.motors)
 
   const onlineJoints = arm.joints.filter((j) => j.can_id != null && motors[j.can_id]?.online)
   const totalJoints = arm.joints.filter((j) => j.can_id != null).length
+
+  const section = arm.side === 'left' ? 'arm_left' : 'arm_right'
+
+  useEffect(() => {
+    getArmPreflight(arm.side)
+      .then(setPreflight)
+      .catch(() => {})
+  }, [arm.side])
 
   async function exec(label: string, fn: () => Promise<CommandResponse>) {
     setBusy(true)
@@ -95,6 +119,36 @@ function ArmPanel({ arm }: { arm: ArmInfo }) {
       }
     } catch (e) {
       toast.error(`${arm.side} arm: ${label} failed`, {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleHome() {
+    setBusy(true)
+    try {
+      const result = await homeArm(arm.side)
+      setHomeResult(result)
+      if (result.success) {
+        const jointSummary = result.joints
+          .map((j) => `${formatJointName(j.joint_name)}: ${j.status.replace(/_/g, ' ')}`)
+          .join('\n')
+        toast.success(`${arm.side} arm: Homed`, {
+          description: result.error
+            ? `${result.error}\n${jointSummary}`
+            : jointSummary,
+          duration: 8000,
+        })
+      } else if (result.preflight) {
+        setPreflight(result.preflight)
+        toast.error(`${arm.side} arm: Pre-flight check failed`, { description: result.error })
+      } else {
+        toast.error(`${arm.side} arm: Homing failed`, { description: result.error })
+      }
+    } catch (e) {
+      toast.error(`${arm.side} arm: Homing failed`, {
         description: e instanceof Error ? e.message : String(e),
       })
     } finally {
@@ -128,19 +182,58 @@ function ArmPanel({ arm }: { arm: ArmInfo }) {
               disabled={busy}
               onConfirm={() => exec('Disable All', () => disableArm(arm.side))}
             />
-            <ConfirmAction
-              label="Home"
-              icon={<LuHouse className="size-4" />}
-              description={`Run startup recovery on all ${arm.side} arm joints. Joints will move toward home position.`}
+            <Button
+              variant="outline"
+              size="sm"
               disabled={busy}
-              onConfirm={() => exec('Home', () => homeArm(arm.side))}
-            />
+              onClick={handleHome}
+              className="gap-1.5"
+            >
+              <LuHouse className="size-4" />
+              <span className="hidden sm:inline">{busy ? 'Homing...' : 'Home'}</span>
+            </Button>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {preflight && !preflight.pass && (
+          <PreflightAlert
+            side={arm.side}
+            preflight={preflight}
+            onRefresh={() =>
+              getArmPreflight(arm.side)
+                .then(setPreflight)
+                .catch(() => {})
+            }
+            onDismiss={() => setPreflight(null)}
+          />
+        )}
+
+        {homeResult && homeResult.joints.length > 0 && (
+          <div className="rounded-md border bg-muted/30 p-3 mb-2">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+              Last Homing Result
+            </h4>
+            <div className="space-y-1">
+              {homeResult.joints.map((j) => (
+                <div key={j.joint_name} className="flex items-center gap-2 text-xs">
+                  <HomingStatusDot status={j.status} />
+                  <span className="font-medium w-28 truncate">{formatJointName(j.joint_name)}</span>
+                  <Badge variant="secondary" className="text-[10px] h-4">
+                    {j.status.replace(/_/g, ' ')}
+                  </Badge>
+                  <span className="text-muted-foreground ml-auto font-mono">
+                    {(j.error_rad * (180 / Math.PI)).toFixed(1)}° err
+                  </span>
+                  <span className="text-muted-foreground font-mono">{j.duration_ms}ms</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {arm.joints.map((joint) => (
-          <JointSlider key={joint.name} joint={joint} />
+          <JointSlider key={joint.name} joint={joint} section={section} onRefresh={onRefresh} />
         ))}
 
         <Separator />
@@ -159,15 +252,122 @@ function ArmPanel({ arm }: { arm: ArmInfo }) {
 
 function JointSlider({
   joint,
+  section,
+  onRefresh,
 }: {
   joint: ArmInfo['joints'][number]
+  section: string
+  onRefresh: () => void
 }) {
   const motor = useTelemetryStore((s) => joint.can_id != null ? s.motors[joint.can_id] : undefined)
+  const [expanded, setExpanded] = useState(false)
+  const [editMin, setEditMin] = useState('')
+  const [editMax, setEditMax] = useState('')
+  const [editHome, setEditHome] = useState('')
+  const [saving, setSaving] = useState(false)
 
   const minDeg = (joint.limits[0] * 180) / Math.PI
   const maxDeg = (joint.limits[1] * 180) / Math.PI
   const currentDeg = motor ? (motor.angle_rad * 180) / Math.PI : null
   const isOnline = motor?.online ?? false
+
+  const homeDeg = (joint.home_rad * 180) / Math.PI
+  const homeError = motor?.home_error_rad != null ? motor.home_error_rad * (180 / Math.PI) : null
+  const atHome = motor?.at_home ?? false
+
+  const limitProximity = (() => {
+    if (currentDeg == null) return 'normal'
+    const marginDeg = 10
+    if (currentDeg <= minDeg || currentDeg >= maxDeg) return 'at_limit'
+    if (currentDeg - minDeg < marginDeg || maxDeg - currentDeg < marginDeg) return 'near_limit'
+    return 'normal'
+  })()
+
+  const sliderTrackClass =
+    limitProximity === 'at_limit'
+      ? '[&_[data-slider-range]]:bg-red-500'
+      : limitProximity === 'near_limit'
+        ? '[&_[data-slider-range]]:bg-amber-500'
+        : ''
+
+  const handleExpand = () => {
+    if (!expanded) {
+      setEditMin(minDeg.toFixed(1))
+      setEditMax(maxDeg.toFixed(1))
+      setEditHome(homeDeg.toFixed(1))
+    }
+    setExpanded(!expanded)
+  }
+
+  const handleSaveLimits = async () => {
+    const newMin = (parseFloat(editMin) * Math.PI) / 180
+    const newMax = (parseFloat(editMax) * Math.PI) / 180
+    if (isNaN(newMin) || isNaN(newMax) || newMin >= newMax) {
+      toast.error('Invalid limits: min must be less than max')
+      return
+    }
+    setSaving(true)
+    try {
+      const res = await updateJointLimits(section, joint.name, newMin, newMax)
+      if (res.success) {
+        toast.success(`Limits saved for ${formatJointName(joint.name)}`)
+        onRefresh()
+      } else {
+        toast.error('Failed to save limits', { description: res.error })
+      }
+    } catch (e) {
+      toast.error('Failed to save limits', {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleSaveHome = async () => {
+    const newHome = (parseFloat(editHome) * Math.PI) / 180
+    if (isNaN(newHome)) {
+      toast.error('Invalid home angle')
+      return
+    }
+    setSaving(true)
+    try {
+      const res = await updateJointHome(section, joint.name, newHome)
+      if (res.success) {
+        toast.success(`Home saved for ${formatJointName(joint.name)}`)
+        onRefresh()
+      } else {
+        toast.error('Failed to save home', { description: res.error })
+      }
+    } catch (e) {
+      toast.error('Failed to save home', {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleSetCurrentAsHome = async () => {
+    setSaving(true)
+    try {
+      const res = await updateJointHome(section, joint.name, undefined, true)
+      if (res.success) {
+        toast.success(`Home set to current position for ${formatJointName(joint.name)}`, {
+          description: res.angle_rad != null ? `${(res.angle_rad * 180 / Math.PI).toFixed(1)}°` : undefined,
+        })
+        onRefresh()
+      } else {
+        toast.error('Failed to set home', { description: res.error })
+      }
+    } catch (e) {
+      toast.error('Failed to set home', {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <div className="space-y-1">
@@ -183,17 +383,37 @@ function JointSlider({
               CAN {joint.can_id}
             </Link>
           )}
+          {atHome && (
+            <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px] h-4">
+              Home
+            </Badge>
+          )}
+          {homeError != null && !atHome && isOnline && (
+            <span className="text-[10px] text-amber-400 font-mono">{homeError.toFixed(1)}° off</span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {currentDeg != null && (
             <span className="text-xs font-mono text-muted-foreground">{currentDeg.toFixed(1)}°</span>
           )}
+          {limitProximity === 'at_limit' && (
+            <Badge variant="destructive" className="text-[10px] h-4">At limit</Badge>
+          )}
+          {limitProximity === 'near_limit' && (
+            <Badge className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-[10px] h-4">Near limit</Badge>
+          )}
           <Badge variant={isOnline ? 'default' : 'secondary'} className="text-xs">
             {isOnline ? 'Online' : joint.can_id == null ? 'N/A' : 'Offline'}
           </Badge>
+          <button
+            onClick={handleExpand}
+            className="text-muted-foreground hover:text-foreground p-0.5"
+          >
+            {expanded ? <LuChevronDown className="size-3.5" /> : <LuChevronRight className="size-3.5" />}
+          </button>
         </div>
       </div>
-      <div className="relative">
+      <div className={`relative ${sliderTrackClass}`}>
         <Slider
           value={currentDeg != null ? [currentDeg] : [0]}
           min={minDeg}
@@ -203,10 +423,90 @@ function JointSlider({
         />
         <div className="mt-0.5 flex justify-between text-[10px] text-muted-foreground font-mono">
           <span>{minDeg.toFixed(0)}°</span>
-          <span>home: {((joint.home_rad * 180) / Math.PI).toFixed(0)}°</span>
+          <span>home: {homeDeg.toFixed(0)}°</span>
           <span>{maxDeg.toFixed(0)}°</span>
         </div>
       </div>
+
+      {expanded && (
+        <div className="ml-2 mt-2 p-3 rounded-md border bg-muted/20 space-y-3">
+          <div>
+            <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
+              <LuSettings className="size-3" /> Joint Limits
+            </h5>
+            <div className="flex items-center gap-2">
+              <div className="flex-1">
+                <label className="text-[10px] text-muted-foreground">Min (°)</label>
+                <Input
+                  type="number"
+                  value={editMin}
+                  onChange={(e) => setEditMin(e.target.value)}
+                  className="h-7 text-xs"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="text-[10px] text-muted-foreground">Max (°)</label>
+                <Input
+                  type="number"
+                  value={editMax}
+                  onChange={(e) => setEditMax(e.target.value)}
+                  className="h-7 text-xs"
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSaveLimits}
+                disabled={saving}
+                className="gap-1 h-7 mt-3"
+              >
+                <LuSave className="size-3" />
+                Save
+              </Button>
+            </div>
+          </div>
+
+          <Separator />
+
+          <div>
+            <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
+              <LuHouse className="size-3" /> Home Position
+            </h5>
+            <div className="flex items-center gap-2">
+              <div className="flex-1">
+                <label className="text-[10px] text-muted-foreground">Home (°)</label>
+                <Input
+                  type="number"
+                  value={editHome}
+                  onChange={(e) => setEditHome(e.target.value)}
+                  className="h-7 text-xs"
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSaveHome}
+                disabled={saving}
+                className="gap-1 h-7 mt-3"
+              >
+                <LuSave className="size-3" />
+                Save
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleSetCurrentAsHome}
+                disabled={saving || !isOnline}
+                className="gap-1 h-7 mt-3"
+                title="Set the motor's current position as the new home"
+              >
+                <LuCrosshair className="size-3" />
+                Set Current
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -248,6 +548,18 @@ function ConfirmAction({
       </DialogContent>
     </Dialog>
   )
+}
+
+function HomingStatusDot({ status }: { status: string }) {
+  const color =
+    status === 'already_home' || status === 'homed'
+      ? 'bg-emerald-400'
+      : status === 'stalled_but_homed'
+        ? 'bg-amber-400'
+        : status === 'error' || status === 'timed_out'
+          ? 'bg-red-400'
+          : 'bg-zinc-500'
+  return <span className={`size-1.5 rounded-full shrink-0 ${color}`} />
 }
 
 function formatJointName(name: string): string {

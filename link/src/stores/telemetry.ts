@@ -10,6 +10,10 @@ export interface MotorSnapshot {
   mode: string
   faults: string[]
   online: boolean
+  home_rad?: number | null
+  home_error_rad?: number | null
+  at_home?: boolean
+  limits?: [number, number] | null
 }
 
 export interface TelemetrySnapshot {

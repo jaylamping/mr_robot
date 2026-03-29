@@ -19,6 +19,10 @@ pub struct MotorSnapshot {
     pub mode: String,
     pub faults: Vec<String>,
     pub online: bool,
+    pub home_rad: Option<f32>,
+    pub home_error_rad: Option<f32>,
+    pub at_home: bool,
+    pub limits: Option<(f32, f32)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -128,15 +132,48 @@ pub async fn webtransport_server(state: Arc<AppState>, port: u16, identity: wtra
     }
 }
 
+/// Build a CAN ID -> (home_rad, limits, settle_tolerance) lookup from config.
+async fn build_home_info(state: &AppState) -> HashMap<u8, (f32, (f32, f32), f32)> {
+    let config = state.config.read().await;
+    let mut map = HashMap::new();
+
+    let arm_configs: Vec<&cortex::config::ArmConfig> = [
+        config.arm_left.as_ref(),
+        config.arm_right.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    for arm in arm_configs {
+        for (_, joint) in arm.joints() {
+            if let Some(id) = joint.can_id {
+                let settle = joint.startup_recovery.settle_tolerance_rad as f32;
+                map.insert(id, (
+                    joint.home_rad as f32,
+                    (joint.limits.0 as f32, joint.limits.1 as f32),
+                    settle,
+                ));
+            }
+        }
+    }
+    map
+}
+
 async fn build_mock_snapshot(
     state: &AppState,
     timestamp_ms: u64,
     system: SystemSnapshot,
 ) -> TelemetrySnapshot {
     let joint_map = build_joint_name_map(state).await;
+    let home_info = build_home_info(state).await;
     let mut motors = Vec::new();
 
     for (&can_id, joint_name) in &joint_map {
+        let (home_rad, limits, _settle) = home_info.get(&can_id)
+            .copied()
+            .unwrap_or((0.0, (-12.57, 12.57), 0.03));
+
         motors.push(MotorSnapshot {
             can_id,
             joint_name: joint_name.clone(),
@@ -147,6 +184,10 @@ async fn build_mock_snapshot(
             mode: "Reset".into(),
             faults: vec![],
             online: false,
+            home_rad: Some(home_rad),
+            home_error_rad: Some(home_rad.abs()),
+            at_home: home_rad.abs() <= 0.03,
+            limits: Some(limits),
         });
     }
 
@@ -164,6 +205,7 @@ async fn build_live_snapshot(
 ) -> TelemetrySnapshot {
     let mut motors_guard = state.motors.lock().await;
     let joint_map = build_joint_name_map(state).await;
+    let home_info = build_home_info(state).await;
     let mut motors = Vec::new();
 
     for (&can_id, motor) in motors_guard.iter_mut() {
@@ -172,6 +214,10 @@ async fn build_live_snapshot(
             .cloned()
             .unwrap_or_else(|| format!("motor_{}", can_id));
 
+        let (home_rad, limits, settle) = home_info.get(&can_id)
+            .copied()
+            .unwrap_or((0.0, (-12.57, 12.57), 0.03));
+
         let result = tokio::time::timeout(
             Duration::from_millis(100),
             motor.read_state(),
@@ -179,6 +225,7 @@ async fn build_live_snapshot(
 
         match result {
             Ok(Ok(ms)) => {
+                let home_err = (ms.angle_rad - home_rad).abs();
                 motors.push(MotorSnapshot {
                     can_id,
                     joint_name,
@@ -189,6 +236,10 @@ async fn build_live_snapshot(
                     mode: format!("{:?}", ms.mode),
                     faults: ms.faults.iter().map(|s| s.to_string()).collect(),
                     online: true,
+                    home_rad: Some(home_rad),
+                    home_error_rad: Some(home_err),
+                    at_home: home_err <= settle,
+                    limits: Some(limits),
                 });
             }
             Ok(Err(e)) => {
@@ -203,6 +254,10 @@ async fn build_live_snapshot(
                     mode: "Unknown".into(),
                     faults: vec![format!("read error: {}", e)],
                     online: false,
+                    home_rad: Some(home_rad),
+                    home_error_rad: None,
+                    at_home: false,
+                    limits: Some(limits),
                 });
             }
             Err(_) => {
@@ -217,6 +272,10 @@ async fn build_live_snapshot(
                     mode: "Unknown".into(),
                     faults: vec!["timeout".into()],
                     online: false,
+                    home_rad: Some(home_rad),
+                    home_error_rad: None,
+                    at_home: false,
+                    limits: Some(limits),
                 });
             }
         }
@@ -241,7 +300,6 @@ impl SystemTelemetryCollector {
                 .with_cpu(CpuRefreshKind::everything())
                 .with_memory(MemoryRefreshKind::everything()),
         );
-        // Prime CPU stats so usage values are meaningful on subsequent refreshes.
         sys.refresh_cpu_usage();
         sys.refresh_memory();
 

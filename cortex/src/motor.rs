@@ -16,6 +16,10 @@ use crate::config::{BusConfig, StartupRecoveryConfig};
 
 const HOST_ID: u8 = 0xAA;
 
+/// Default soft-limit margin in radians (~10 degrees). Velocity/torque commands ramp
+/// down linearly within this zone when pushing toward a limit.
+const DEFAULT_SOFT_LIMIT_MARGIN_RAD: f32 = 0.175;
+
 /// Signed smallest angle from `from_rad` to `to_rad`, in (‑π, π]: move along the shorter arc on a circle.
 #[inline]
 pub fn shortest_angle_err(from_rad: f32, to_rad: f32) -> f32 {
@@ -29,14 +33,14 @@ fn clamp_cmd_to_limits(cmd: f32, joint_limits_rad: Option<(f32, f32)>) -> f32 {
     joint_limits_rad.map_or(cmd, |(lo, hi)| cmd.clamp(lo, hi))
 }
 
-/// Linear error in the encoder frame (not wrapped). Use for “at home?” and “still far?” only.
+/// Linear error in the encoder frame (not wrapped). Use for "at home?" and "still far?" only.
 #[inline]
 fn linear_error(pos_rad: f32, target_rad: f32) -> f32 {
     target_rad - pos_rad
 }
 
 /// Step direction toward target. With **bounded** joints (`joint_limits` in use), always linear —
-/// shortest arc is wrong for a limited range and can command a ~270° wrap the mechanics can’t mean.
+/// shortest arc is wrong for a limited range and can command a ~270° wrap the mechanics can't mean.
 /// Otherwise, shortest arc only when linear error `> π` and `prefer_shortest_angle`.
 #[inline]
 fn step_delta_toward_home(
@@ -69,6 +73,9 @@ pub struct Motor {
     host_id: u8,
     enabled: bool,
     pub debug: bool,
+    joint_limits: Option<(f32, f32)>,
+    soft_limit_margin_rad: f32,
+    last_known_position: Option<f32>,
 }
 
 impl Motor {
@@ -79,12 +86,70 @@ impl Motor {
             host_id: HOST_ID,
             enabled: false,
             debug: false,
+            joint_limits: None,
+            soft_limit_margin_rad: DEFAULT_SOFT_LIMIT_MARGIN_RAD,
+            last_known_position: None,
         }
     }
 
     pub fn with_host_id(mut self, host_id: u8) -> Self {
         self.host_id = host_id;
         self
+    }
+
+    // -- Joint limits --
+
+    pub fn set_joint_limits(&mut self, min_rad: f32, max_rad: f32) {
+        self.joint_limits = Some((min_rad, max_rad));
+    }
+
+    pub fn clear_joint_limits(&mut self) {
+        self.joint_limits = None;
+    }
+
+    pub fn joint_limits(&self) -> Option<(f32, f32)> {
+        self.joint_limits
+    }
+
+    pub fn set_soft_limit_margin(&mut self, margin_rad: f32) {
+        self.soft_limit_margin_rad = margin_rad.max(0.0);
+    }
+
+    /// Compute a velocity scale factor (0.0–1.0) based on proximity to joint limits.
+    /// Returns 1.0 if no limits are set or the motor is not near a boundary in the
+    /// direction of `velocity_rads`.
+    fn soft_limit_velocity_scale(&self, velocity_rads: f32) -> f32 {
+        let (lo, hi) = match self.joint_limits {
+            Some(l) => l,
+            None => return 1.0,
+        };
+        let pos = match self.last_known_position {
+            Some(p) => p,
+            None => return 1.0,
+        };
+        let margin = self.soft_limit_margin_rad;
+        if margin <= 0.0 {
+            return 1.0;
+        }
+
+        if velocity_rads > 0.0 {
+            let dist_to_max = hi - pos;
+            if dist_to_max <= 0.0 {
+                return 0.0;
+            }
+            if dist_to_max < margin {
+                return (dist_to_max / margin).clamp(0.0, 1.0);
+            }
+        } else if velocity_rads < 0.0 {
+            let dist_to_min = pos - lo;
+            if dist_to_min <= 0.0 {
+                return 0.0;
+            }
+            if dist_to_min < margin {
+                return (dist_to_min / margin).clamp(0.0, 1.0);
+            }
+        }
+        1.0
     }
 
     // -- Lifecycle --
@@ -96,13 +161,35 @@ impl Motor {
         let (id, data) = cmd.to_can_packet(self.can_id);
         let fb = self.send_and_recv(id, &data).await?;
         self.enabled = true;
-        Ok(Self::parse_feedback(fb))
+        let state = Self::parse_feedback(fb);
+        self.last_known_position = Some(state.angle_rad);
+        Ok(state)
+    }
+
+    /// Enable the motor and immediately hold position to prevent gravity drop.
+    /// Returns the position being held.
+    pub async fn enable_with_hold(&mut self, kp: f32, kd: f32) -> Result<f32> {
+        let state = self.enable().await?;
+        let hold_pos = state.angle_rad;
+        self.send_control(hold_pos, 0.0, kp, kd, 0.0).await?;
+        Ok(hold_pos)
     }
 
     pub async fn disable(&mut self) -> Result<MotorState> {
         let cmd = StopCommand {
             host_id: self.host_id,
             clear_fault: false,
+        };
+        let (id, data) = cmd.to_can_packet(self.can_id);
+        let fb = self.send_and_recv(id, &data).await?;
+        self.enabled = false;
+        Ok(Self::parse_feedback(fb))
+    }
+
+    pub async fn clear_faults(&mut self) -> Result<MotorState> {
+        let cmd = StopCommand {
+            host_id: self.host_id,
+            clear_fault: true,
         };
         let (id, data) = cmd.to_can_packet(self.can_id);
         let fb = self.send_and_recv(id, &data).await?;
@@ -138,15 +225,8 @@ impl Motor {
             return Ok(None);
         }
 
-        // The motor output can't physically have spun multiple turns within joint limits.
-        // The multi-turn encoder just accumulated revolutions from REPL spinning / free run.
-        // set_zero redefines current physical position as 0.
         self.set_zero().await?;
 
-        // After set_zero, encoder reads ~0. The real target relative to the new zero is
-        // whatever offset home was from the old position — but because the gearbox output
-        // position didn't really change, the residual is just (target - pos) wrapped to
-        // the nearest equivalent within ±π.
         let residual = shortest_angle_err(0.0, target_rad - pos);
         Ok(Some(residual))
     }
@@ -162,17 +242,30 @@ impl Motor {
         torque_nm: f32,
     ) -> Result<MotorState> {
         self.ensure_enabled().await?;
+
+        let clamped_pos = clamp_cmd_to_limits(position_rad, self.joint_limits);
+
+        let scale = self.soft_limit_velocity_scale(velocity_rads);
+        let clamped_vel = velocity_rads * scale;
+        let clamped_torque = if scale < 1.0 && torque_nm.abs() > 0.0 {
+            torque_nm * scale
+        } else {
+            torque_nm
+        };
+
         let typed = RobStride03Command {
-            target_angle_rad: position_rad,
-            target_velocity_rads: velocity_rads,
+            target_angle_rad: clamped_pos,
+            target_velocity_rads: clamped_vel,
             kp,
             kd,
-            torque_nm,
+            torque_nm: clamped_torque,
         };
         let ctrl: ControlCommand = typed.to_control_command();
         let (id, data) = ctrl.to_can_packet(self.can_id);
         let fb = self.send_and_recv(id, &data).await?;
-        Ok(Self::parse_feedback(fb))
+        let state = Self::parse_feedback(fb);
+        self.last_known_position = Some(state.angle_rad);
+        Ok(state)
     }
 
     pub async fn move_to(&mut self, position_rad: f32, kp: Option<f32>, kd: Option<f32>) -> Result<MotorState> {
@@ -413,7 +506,9 @@ impl Motor {
         };
         let (id, data) = cmd.to_can_packet(self.can_id);
         let fb = self.send_and_recv(id, &data).await?;
-        Ok(Self::parse_feedback(fb))
+        let state = Self::parse_feedback(fb);
+        self.last_known_position = Some(state.angle_rad);
+        Ok(state)
     }
 
     pub async fn read_param(&mut self, param: RobStride03Parameter) -> Result<f32> {
@@ -446,7 +541,9 @@ impl Motor {
     }
 
     pub async fn read_position(&mut self) -> Result<f32> {
-        self.read_param(RobStride03Parameter::MechPos).await
+        let pos = self.read_param(RobStride03Parameter::MechPos).await?;
+        self.last_known_position = Some(pos);
+        Ok(pos)
     }
 
     pub async fn read_velocity(&mut self) -> Result<f32> {
@@ -455,6 +552,28 @@ impl Motor {
 
     pub async fn read_voltage(&mut self) -> Result<f32> {
         self.read_param(RobStride03Parameter::VBus).await
+    }
+
+    /// Read the raw fault status register (0x3022). Bits:
+    /// bit14=stall overload, bit7=encoder uncalibrated, bit3=overvoltage,
+    /// bit2=undervoltage, bit1=driver chip fault, bit0=overtemperature.
+    pub async fn read_fault_code(&mut self) -> Result<u32> {
+        let cmd = ReadCommand {
+            host_id: self.host_id,
+            parameter_index: 0x3022,
+            data: 0,
+            read_status: false,
+        };
+        let (id, data) = cmd.to_can_packet(self.can_id);
+        let mut proto = self.protocol.lock().await;
+        proto.send(id, &data).await
+            .map_err(|e| anyhow::anyhow!("{:#}", e))?;
+        let (resp_id, resp_data) = proto.recv().await
+            .map_err(|e| anyhow::anyhow!("{:#}", e))?;
+        drop(proto);
+        let resp_cmd = Command::from_can_packet(resp_id, resp_data);
+        let read_resp = ReadCommand::from_command(resp_cmd);
+        Ok(read_resp.data)
     }
 
     // -- Helpers --

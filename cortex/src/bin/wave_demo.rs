@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
     arm.enable_all().await?;
     println!("All joints enabled");
 
-    let recovery = arm.startup_safe_recovery().await?;
+    let recovery = arm.startup_safe_recovery(false).await?;
     if recovery.stall_backoffs > 0 {
         println!(
             "Startup recovery reported {} stall/backoff event(s) (joint was held or blocked).",

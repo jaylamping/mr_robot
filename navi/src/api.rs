@@ -3,11 +3,12 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use cortex::arm::PreflightResult;
 use cortex::motor::Motor;
 
 use crate::AppState;
@@ -121,6 +122,62 @@ struct SequenceInfo {
     description: String,
 }
 
+// -- Homing response types --
+
+#[derive(Serialize)]
+struct HomeResponse {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    joints: Vec<JointHomingResultJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preflight: Option<PreflightResult>,
+}
+
+#[derive(Serialize)]
+struct JointHomingResultJson {
+    joint_name: String,
+    status: String,
+    start_position_rad: f32,
+    end_position_rad: f32,
+    home_target_rad: f32,
+    error_rad: f32,
+    stall_backoffs: u32,
+    duration_ms: u64,
+}
+
+// -- Limit/home update types --
+
+#[derive(Deserialize)]
+struct UpdateLimitsRequest {
+    min_rad: f64,
+    max_rad: f64,
+}
+
+#[derive(Deserialize)]
+struct UpdateHomeRequest {
+    #[serde(default)]
+    home_rad: Option<f64>,
+    #[serde(default)]
+    set_current: bool,
+}
+
+#[derive(Deserialize)]
+struct HomeArmRequest {
+    #[serde(default)]
+    override_preflight: bool,
+}
+
+#[derive(Serialize)]
+struct JointHomeStatusJson {
+    joint_name: String,
+    home_rad: f32,
+    current_rad: f32,
+    error_rad: f32,
+    at_home: bool,
+    limits: (f32, f32),
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/config", get(get_config))
@@ -138,6 +195,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/arms/{side}/disable", post(disable_arm))
         .route("/arms/{side}/home", post(home_arm))
         .route("/arms/{side}/pose", post(set_arm_pose))
+        .route("/arms/{side}/preflight", get(preflight_arm))
+        .route("/arms/{side}/home-status", get(home_status_arm))
         .route("/motors/{id}/spin", post(spin_motor))
         .route("/motors/{id}/torque", post(torque_motor))
         .route("/motors/{id}/jog", post(jog_motor))
@@ -151,6 +210,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/motors/{id}/assign", post(assign_motor))
         .route("/motors/{id}/unassign", post(unassign_motor))
         .route("/joint-slots", get(get_joint_slots))
+        .route("/joints/{section}/{joint}/limits", put(update_joint_limits))
+        .route("/joints/{section}/{joint}/home", put(update_joint_home))
 }
 
 async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -355,6 +416,9 @@ async fn move_motor(
     Path(id): Path<u8>,
     Json(req): Json<MoveRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
+    if let Some(err) = check_motor_limits(&state, id, Some(req.position_rad)).await {
+        return Ok(Json(err));
+    }
     let mut motors = state.motors.lock().await;
     let motor = motors.get_mut(&id).ok_or(StatusCode::NOT_FOUND)?;
     match motor.move_to(req.position_rad, req.kp, req.kd).await {
@@ -380,6 +444,9 @@ async fn control_motor(
     Path(id): Path<u8>,
     Json(req): Json<ControlRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
+    if let Some(err) = check_motor_limits(&state, id, Some(req.position)).await {
+        return Ok(Json(err));
+    }
     let mut motors = state.motors.lock().await;
     let motor = motors.get_mut(&id).ok_or(StatusCode::NOT_FOUND)?;
     match motor
@@ -489,28 +556,120 @@ async fn disable_arm(
 async fn home_arm(
     State(state): State<Arc<AppState>>,
     Path(side): Path<String>,
+    body: Option<Json<HomeArmRequest>>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let force = body.map_or(false, |b| b.override_preflight);
+
+    let mut arms = state.arms.lock().await;
+    let arm = arms.get_mut(&side).ok_or(StatusCode::NOT_FOUND)?;
+
+    if !force {
+        match arm.preflight_check().await {
+            Ok(pf) if !pf.pass => {
+                let violations: Vec<String> = pf.joints.iter()
+                    .filter_map(|j| j.violation.as_ref().map(|v| {
+                        format!("{}: {:.1}° past {} limit", j.joint_name, v.exceeded_by_deg, v.which_limit)
+                    }))
+                    .collect();
+                return Ok(Json(HomeResponse {
+                    success: false,
+                    error: Some(format!("Pre-flight check failed: {}", violations.join("; "))),
+                    joints: vec![],
+                    preflight: Some(pf),
+                }));
+            }
+            Err(e) => {
+                return Ok(Json(HomeResponse {
+                    success: false,
+                    error: Some(format!("Pre-flight check error: {:#}", e)),
+                    joints: vec![],
+                    preflight: None,
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    match arm.startup_safe_recovery(force).await {
+        Ok(summary) => {
+            let joints: Vec<JointHomingResultJson> = summary.joints.iter().map(|j| {
+                JointHomingResultJson {
+                    joint_name: j.joint_name.clone(),
+                    status: j.status.as_str().to_string(),
+                    start_position_rad: j.start_position_rad,
+                    end_position_rad: j.end_position_rad,
+                    home_target_rad: j.home_target_rad,
+                    error_rad: j.error_rad,
+                    stall_backoffs: j.stall_backoffs,
+                    duration_ms: j.duration_ms,
+                }
+            }).collect();
+
+            Ok(Json(HomeResponse {
+                success: true,
+                error: if summary.stall_backoffs > 0 {
+                    Some(format!("{} stall backoffs during recovery", summary.stall_backoffs))
+                } else {
+                    None
+                },
+                joints,
+                preflight: None,
+            }))
+        }
+        Err(e) => Ok(Json(HomeResponse {
+            success: false,
+            error: Some(format!("{:#}", e)),
+            joints: vec![],
+            preflight: None,
+        })),
+    }
+}
+
+async fn preflight_arm(
+    State(state): State<Arc<AppState>>,
+    Path(side): Path<String>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let mut arms = state.arms.lock().await;
     let arm = arms.get_mut(&side).ok_or(StatusCode::NOT_FOUND)?;
-    match arm.startup_safe_recovery().await {
-        Ok(summary) => Ok(Json(CommandResponse {
-            success: true,
-            error: if summary.stall_backoffs > 0 {
-                Some(format!("{} stall backoffs during recovery", summary.stall_backoffs))
-            } else {
-                None
-            },
-            angle_rad: None,
-            velocity_rads: None,
-            torque_nm: None,
-        })),
+    match arm.preflight_check().await {
+        Ok(result) => Ok(Json(result).into_response()),
         Err(e) => Ok(Json(CommandResponse {
             success: false,
             error: Some(format!("{:#}", e)),
             angle_rad: None,
             velocity_rads: None,
             torque_nm: None,
-        })),
+        }).into_response()),
+    }
+}
+
+async fn home_status_arm(
+    State(state): State<Arc<AppState>>,
+    Path(side): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let mut arms = state.arms.lock().await;
+    let arm = arms.get_mut(&side).ok_or(StatusCode::NOT_FOUND)?;
+    match arm.get_homing_status().await {
+        Ok(statuses) => {
+            let json: Vec<JointHomeStatusJson> = statuses.into_iter().map(|s| {
+                JointHomeStatusJson {
+                    joint_name: s.joint_name,
+                    home_rad: s.home_rad,
+                    current_rad: s.current_rad,
+                    error_rad: s.error_rad,
+                    at_home: s.at_home,
+                    limits: s.limits,
+                }
+            }).collect();
+            Ok(Json(json).into_response())
+        }
+        Err(e) => Ok(Json(CommandResponse {
+            success: false,
+            error: Some(format!("{:#}", e)),
+            angle_rad: None,
+            velocity_rads: None,
+            torque_nm: None,
+        }).into_response()),
     }
 }
 
@@ -603,6 +762,22 @@ async fn jog_motor(
     match motor.read_position().await {
         Ok(current_rad) => {
             let target_rad = current_rad + req.delta_deg.to_radians();
+
+            if let Some(limits) = motor.joint_limits() {
+                if target_rad < limits.0 || target_rad > limits.1 {
+                    return Ok(Json(CommandResponse {
+                        success: false,
+                        error: Some(format!(
+                            "jog target {:.3} rad exceeds limits [{:.3}, {:.3}]",
+                            target_rad, limits.0, limits.1
+                        )),
+                        angle_rad: Some(current_rad),
+                        velocity_rads: None,
+                        torque_nm: None,
+                    }));
+                }
+            }
+
             match motor.move_to(target_rad, req.kp, req.kd).await {
                 Ok(ms) => Ok(Json(CommandResponse {
                     success: true,
@@ -709,7 +884,7 @@ async fn run_sequence(
             let mut arms = state.arms.lock().await;
             let mut errors = Vec::new();
             for (side, arm) in arms.iter_mut() {
-                if let Err(e) = arm.startup_safe_recovery().await {
+                if let Err(e) = arm.startup_safe_recovery(false).await {
                     errors.push(format!("{} arm: {:#}", side, e));
                 }
             }
@@ -907,6 +1082,275 @@ async fn get_joint_slots(State(state): State<Arc<AppState>>) -> impl IntoRespons
         JointSlot { section, joint, can_id, display_name }
     }).collect();
     Json(slots)
+}
+
+// -- Joint limit/home update endpoints --
+
+async fn update_joint_limits(
+    State(state): State<Arc<AppState>>,
+    Path((section, joint)): Path<(String, String)>,
+    Json(req): Json<UpdateLimitsRequest>,
+) -> impl IntoResponse {
+    use std::f64::consts::PI;
+    let max_range = 4.0 * PI;
+
+    if req.min_rad >= req.max_rad {
+        return Json(CommandResponse {
+            success: false,
+            error: Some("min_rad must be less than max_rad".into()),
+            angle_rad: None,
+            velocity_rads: None,
+            torque_nm: None,
+        });
+    }
+    if req.min_rad < -max_range || req.max_rad > max_range {
+        return Json(CommandResponse {
+            success: false,
+            error: Some(format!("limits must be within ±{:.2} rad (±4π)", max_range)),
+            angle_rad: None,
+            velocity_rads: None,
+            torque_nm: None,
+        });
+    }
+
+    {
+        let mut config = state.config.write().await;
+        let updated = match section.as_str() {
+            "arm_left" => config.arm_left.as_mut().and_then(|arm| {
+                arm.joints_mut().into_iter()
+                    .find(|(n, _)| *n == joint)
+                    .map(|(_, j)| { j.limits = (req.min_rad, req.max_rad); })
+            }).is_some(),
+            "arm_right" => config.arm_right.as_mut().and_then(|arm| {
+                arm.joints_mut().into_iter()
+                    .find(|(n, _)| *n == joint)
+                    .map(|(_, j)| { j.limits = (req.min_rad, req.max_rad); })
+            }).is_some(),
+            "waist" => config.waist.as_mut().and_then(|w| {
+                w.get_mut(&joint).map(|j| { j.limits = (req.min_rad, req.max_rad); })
+            }).is_some(),
+            _ => false,
+        };
+
+        if !updated {
+            return Json(CommandResponse {
+                success: false,
+                error: Some(format!("joint '{}' not found in section '{}'", joint, section)),
+                angle_rad: None,
+                velocity_rads: None,
+                torque_nm: None,
+            });
+        }
+
+        if let Err(e) = config.save(&state.config_path) {
+            return Json(CommandResponse {
+                success: false,
+                error: Some(format!("Config updated but save failed: {:#}", e)),
+                angle_rad: None,
+                velocity_rads: None,
+                torque_nm: None,
+            });
+        }
+    }
+
+    {
+        let mut arms = state.arms.lock().await;
+        let side = match section.as_str() {
+            "arm_left" => "left",
+            "arm_right" => "right",
+            _ => "",
+        };
+        if let Some(arm) = arms.get_mut(side) {
+            arm.update_joint_limits(&joint, req.min_rad as f32, req.max_rad as f32);
+        }
+    }
+
+    info!(section = %section, joint = %joint, min = req.min_rad, max = req.max_rad, "joint limits updated");
+
+    Json(CommandResponse {
+        success: true,
+        error: None,
+        angle_rad: None,
+        velocity_rads: None,
+        torque_nm: None,
+    })
+}
+
+async fn update_joint_home(
+    State(state): State<Arc<AppState>>,
+    Path((section, joint)): Path<(String, String)>,
+    Json(req): Json<UpdateHomeRequest>,
+) -> impl IntoResponse {
+    let new_home = if req.set_current {
+        let mut arms = state.arms.lock().await;
+        let side = match section.as_str() {
+            "arm_left" => "left",
+            "arm_right" => "right",
+            _ => "",
+        };
+        let arm = match arms.get_mut(side) {
+            Some(a) => a,
+            None => return Json(CommandResponse {
+                success: false,
+                error: Some(format!("arm '{}' not found", side)),
+                angle_rad: None,
+                velocity_rads: None,
+                torque_nm: None,
+            }),
+        };
+
+        let positions = match arm.get_joint_positions().await {
+            Ok(p) => p,
+            Err(e) => return Json(CommandResponse {
+                success: false,
+                error: Some(format!("failed to read positions: {:#}", e)),
+                angle_rad: None,
+                velocity_rads: None,
+                torque_nm: None,
+            }),
+        };
+        match positions.iter().find(|(n, _)| n == &joint) {
+            Some((_, pos)) => *pos as f64,
+            None => return Json(CommandResponse {
+                success: false,
+                error: Some(format!("joint '{}' not found in arm", joint)),
+                angle_rad: None,
+                velocity_rads: None,
+                torque_nm: None,
+            }),
+        }
+    } else {
+        match req.home_rad {
+            Some(h) => h,
+            None => return Json(CommandResponse {
+                success: false,
+                error: Some("provide either home_rad or set_current: true".into()),
+                angle_rad: None,
+                velocity_rads: None,
+                torque_nm: None,
+            }),
+        }
+    };
+
+    {
+        let mut config = state.config.write().await;
+
+        let limits = match section.as_str() {
+            "arm_left" => config.arm_left.as_ref().and_then(|arm| {
+                arm.joints().into_iter().find(|(n, _)| *n == joint).map(|(_, j)| j.limits)
+            }),
+            "arm_right" => config.arm_right.as_ref().and_then(|arm| {
+                arm.joints().into_iter().find(|(n, _)| *n == joint).map(|(_, j)| j.limits)
+            }),
+            _ => None,
+        };
+
+        if let Some((lo, hi)) = limits {
+            if new_home < lo || new_home > hi {
+                return Json(CommandResponse {
+                    success: false,
+                    error: Some(format!("home_rad {:.3} is outside limits [{:.3}, {:.3}]", new_home, lo, hi)),
+                    angle_rad: None,
+                    velocity_rads: None,
+                    torque_nm: None,
+                });
+            }
+        }
+
+        let updated = match section.as_str() {
+            "arm_left" => config.arm_left.as_mut().and_then(|arm| {
+                arm.joints_mut().into_iter()
+                    .find(|(n, _)| *n == joint)
+                    .map(|(_, j)| { j.home_rad = new_home; })
+            }).is_some(),
+            "arm_right" => config.arm_right.as_mut().and_then(|arm| {
+                arm.joints_mut().into_iter()
+                    .find(|(n, _)| *n == joint)
+                    .map(|(_, j)| { j.home_rad = new_home; })
+            }).is_some(),
+            "waist" => config.waist.as_mut().and_then(|w| {
+                w.get_mut(&joint).map(|j| { j.home_rad = new_home; })
+            }).is_some(),
+            _ => false,
+        };
+
+        if !updated {
+            return Json(CommandResponse {
+                success: false,
+                error: Some(format!("joint '{}' not found in section '{}'", joint, section)),
+                angle_rad: None,
+                velocity_rads: None,
+                torque_nm: None,
+            });
+        }
+
+        if let Err(e) = config.save(&state.config_path) {
+            return Json(CommandResponse {
+                success: false,
+                error: Some(format!("Config updated but save failed: {:#}", e)),
+                angle_rad: None,
+                velocity_rads: None,
+                torque_nm: None,
+            });
+        }
+    }
+
+    {
+        let mut arms = state.arms.lock().await;
+        let side = match section.as_str() {
+            "arm_left" => "left",
+            "arm_right" => "right",
+            _ => "",
+        };
+        if let Some(arm) = arms.get_mut(side) {
+            arm.update_joint_home(&joint, new_home as f32);
+        }
+    }
+
+    info!(section = %section, joint = %joint, home_rad = new_home, "joint home updated");
+
+    Json(CommandResponse {
+        success: true,
+        error: None,
+        angle_rad: Some(new_home as f32),
+        velocity_rads: None,
+        torque_nm: None,
+    })
+}
+
+// -- Helpers --
+
+/// API-level limit check. Returns Some(error response) if position violates limits.
+async fn check_motor_limits(
+    state: &AppState,
+    can_id: u8,
+    position_rad: Option<f32>,
+) -> Option<CommandResponse> {
+    let pos = position_rad?;
+    if pos.abs() < f32::EPSILON && pos == 0.0 {
+        return None;
+    }
+    let config = state.config.read().await;
+    let (_, limits) = find_joint_config(&config, can_id);
+    let (lo, hi) = (limits.0 as f32, limits.1 as f32);
+
+    if lo.abs() > 12.0 && hi.abs() > 12.0 {
+        return None;
+    }
+
+    if pos < lo || pos > hi {
+        return Some(CommandResponse {
+            success: false,
+            error: Some(format!(
+                "position {:.3} rad exceeds limits [{:.3}, {:.3}] for motor {}",
+                pos, lo, hi, can_id
+            )),
+            angle_rad: None,
+            velocity_rads: None,
+            torque_nm: None,
+        });
+    }
+    None
 }
 
 fn find_joint_config(config: &cortex::config::RobotConfig, can_id: u8) -> (String, (f64, f64)) {

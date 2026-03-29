@@ -4,6 +4,7 @@ import { getMotors, getConfig, getJointSlots, discoverMotors, type MotorInfo, ty
 import { useTelemetryStore } from '@/stores/telemetry'
 import { MotorCard } from '@/components/MotorCard'
 import { RobotDiagram } from '@/components/RobotDiagram'
+import { HomingStatusCard } from '@/components/HomingStatusCard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { LuBot, LuRadar } from 'react-icons/lu'
@@ -136,6 +137,17 @@ function OverviewPage() {
           </div>
         )}
       </div>
+
+      {config && (
+        <div className="mb-6">
+          <HomingStatusCard
+            armSides={[
+              ...(config.arm_left ? ['left'] : []),
+              ...(config.arm_right ? ['right'] : []),
+            ]}
+          />
+        </div>
+      )}
 
       {config && (
         <div className="mb-6">
