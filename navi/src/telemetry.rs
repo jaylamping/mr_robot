@@ -8,6 +8,10 @@ use tracing::{debug, info, warn};
 
 use crate::AppState;
 
+/// Single-motor `read_state` budget per telemetry tick. USB/CAN round-trips often exceed 100ms
+/// under load; marking motors offline spuriously breaks the Link Overview.
+const MOTOR_READ_TIMEOUT: Duration = Duration::from_millis(400);
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MotorSnapshot {
     pub can_id: u8,
@@ -183,7 +187,7 @@ async fn build_mock_snapshot(
             temperature_c: 25.0,
             mode: "Reset".into(),
             faults: vec![],
-            online: false,
+            online: true,
             home_rad: Some(home_rad),
             home_error_rad: Some(home_rad.abs()),
             at_home: home_rad.abs() <= 0.03,
@@ -218,10 +222,7 @@ async fn build_live_snapshot(
             .copied()
             .unwrap_or((0.0, (-12.57, 12.57), 0.03));
 
-        let result = tokio::time::timeout(
-            Duration::from_millis(100),
-            motor.read_state(),
-        ).await;
+        let result = tokio::time::timeout(MOTOR_READ_TIMEOUT, motor.read_state()).await;
 
         match result {
             Ok(Ok(ms)) => {

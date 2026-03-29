@@ -2,6 +2,7 @@ import { createRootRoute, Link, Outlet, useMatches } from '@tanstack/react-route
 import { useState } from 'react'
 import { useWebTransport } from '@/hooks/useWebTransport'
 import { useTelemetryStore } from '@/stores/telemetry'
+import { useRobotServerStatus } from '@/lib/queries'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -33,7 +34,8 @@ const navItems = [
 function RootLayout() {
   useWebTransport()
   const connected = useTelemetryStore((s) => s.connected)
-  const motorCount = useTelemetryStore((s) => Object.keys(s.motors).length)
+  const statusQ = useRobotServerStatus()
+  const motorCount = statusQ.data?.motor_count ?? 0
   const [mobileOpen, setMobileOpen] = useState(false)
 
   return (

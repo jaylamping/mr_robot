@@ -51,8 +51,8 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
 
   updateSnapshot: (snap) =>
     set((state) => {
-      const nextMotors = { ...state.motors }
-      const nextHistory = { ...state.history }
+      const nextMotors: Record<number, MotorSnapshot> = {}
+      const nextHistory: Record<number, MotorSnapshot[]> = { ...state.history }
 
       for (const m of snap.motors) {
         nextMotors[m.can_id] = m
@@ -63,6 +63,13 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
           updated.length > HISTORY_MAX
             ? updated.slice(updated.length - HISTORY_MAX)
             : updated
+      }
+
+      for (const id of Object.keys(nextHistory)) {
+        const n = Number(id)
+        if (!Number.isFinite(n) || nextMotors[n] === undefined) {
+          delete nextHistory[n]
+        }
       }
 
       return {

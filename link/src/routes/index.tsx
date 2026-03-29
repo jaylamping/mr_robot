@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
-import type { DiscoverResult } from '@/lib/api'
-import { useTelemetryStore } from '@/stores/telemetry'
+import type { DiscoverResult, MotorInfo } from '@/lib/api'
+import { useTelemetryStore, type MotorSnapshot } from '@/stores/telemetry'
 import { MotorCard } from '@/components/MotorCard'
 import { RobotDiagram } from '@/components/RobotDiagram'
 import { HomingStatusCard } from '@/components/HomingStatusCard'
@@ -15,6 +15,15 @@ import { LuBot, LuRadar } from 'react-icons/lu'
 export const Route = createFileRoute('/')({
   component: OverviewPage,
 })
+
+/** Same rule as MotorCard: prefer live telemetry when present, else REST list `online`. */
+function isMotorShowingOnline(
+  m: MotorInfo,
+  telemetryMotors: Record<number, MotorSnapshot>,
+): boolean {
+  const live = telemetryMotors[m.can_id]
+  return live?.online ?? m.online
+}
 
 function OverviewPage() {
   const [discoverResult, setDiscoverResult] = useState<DiscoverResult | null>(null)
@@ -81,12 +90,15 @@ function OverviewPage() {
     )
   }
 
-  const onlineCount = Object.values(telemetryMotors).filter((m) => m.online).length
-  const faultCount = Object.values(telemetryMotors).filter((m) => m.faults.length > 0).length
+  const onlineCount = motors.filter((m) => isMotorShowingOnline(m, telemetryMotors)).length
+  const faultCount = motors.filter((m) => {
+    const live = telemetryMotors[m.can_id]
+    return (live?.faults.length ?? 0) > 0
+  }).length
   const offlineCount = motors.length - onlineCount
 
-  const onlineMotors = motors.filter((m) => telemetryMotors[m.can_id]?.online)
-  const offlineMotors = motors.filter((m) => !telemetryMotors[m.can_id]?.online)
+  const onlineMotors = motors.filter((m) => isMotorShowingOnline(m, telemetryMotors))
+  const offlineMotors = motors.filter((m) => !isMotorShowingOnline(m, telemetryMotors))
 
   const homingArmSides = [
     ...(config?.arm_left ? ['left'] : []),
