@@ -268,6 +268,7 @@ async fn get_motors(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let joint_map = build_joint_name_map(&state).await;
     let motors = state.motors.lock().await;
     let config = state.config.read().await;
+    let latest = state.latest_telemetry.read().await;
 
     let mut infos: Vec<MotorInfo> = Vec::new();
 
@@ -279,12 +280,17 @@ async fn get_motors(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
         let (actuator_type, limits) = find_joint_config(&config, can_id);
 
+        let online = latest.as_ref()
+            .and_then(|snap| snap.motors.iter().find(|m| m.can_id == can_id))
+            .map(|m| m.online)
+            .unwrap_or(true);
+
         infos.push(MotorInfo {
             can_id,
             joint_name,
             actuator_type,
             limits,
-            online: true,
+            online,
         });
     }
 

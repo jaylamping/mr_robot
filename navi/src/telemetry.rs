@@ -10,14 +10,14 @@ use crate::AppState;
 
 /// Single-motor `read_state` budget per telemetry tick. USB/CAN round-trips often exceed 100ms
 /// under load; marking motors offline spuriously breaks the Link Overview.
-const MOTOR_READ_TIMEOUT: Duration = Duration::from_millis(400);
+const MOTOR_READ_TIMEOUT: Duration = Duration::from_millis(800);
 
 /// After this many consecutive read failures a motor is temporarily skipped to avoid blocking
 /// the bus for motors that are actually online.
-const CONSECUTIVE_FAIL_SKIP_THRESHOLD: u32 = 5;
+const CONSECUTIVE_FAIL_SKIP_THRESHOLD: u32 = 10;
 
 /// When a motor has been skipped due to consecutive failures, re-probe it every N ticks.
-const REPROBE_INTERVAL_TICKS: u32 = 40;
+const REPROBE_INTERVAL_TICKS: u32 = 10;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MotorSnapshot {
@@ -238,7 +238,11 @@ impl MotorHealthTracker {
     }
 
     fn record_success(&mut self, can_id: u8) {
-        self.consecutive_failures.remove(&can_id);
+        if let Some(prev) = self.consecutive_failures.remove(&can_id) {
+            if prev >= CONSECUTIVE_FAIL_SKIP_THRESHOLD {
+                info!(can_id, previous_failures = prev, "motor recovered after being skipped");
+            }
+        }
     }
 
     fn record_failure(&mut self, can_id: u8) {
@@ -256,12 +260,9 @@ async fn build_live_snapshot(
     let joint_map = build_joint_name_map(state).await;
     let home_info = build_home_info(state).await;
 
-    let motor_ids: Vec<u8> = {
-        let motors_guard = state.motors.lock().await;
-        motors_guard.keys().copied().collect()
-    };
-
     let mut motors = Vec::new();
+    let mut motors_guard = state.motors.lock().await;
+    let motor_ids: Vec<u8> = motors_guard.keys().copied().collect();
 
     for can_id in motor_ids {
         let joint_name = joint_map
@@ -292,13 +293,10 @@ async fn build_live_snapshot(
             continue;
         }
 
-        let result = {
-            let mut motors_guard = state.motors.lock().await;
-            if let Some(motor) = motors_guard.get_mut(&can_id) {
-                Some(tokio::time::timeout(MOTOR_READ_TIMEOUT, motor.read_state_validated()).await)
-            } else {
-                None
-            }
+        let result = if let Some(motor) = motors_guard.get_mut(&can_id) {
+            Some(tokio::time::timeout(MOTOR_READ_TIMEOUT, motor.read_state_validated()).await)
+        } else {
+            None
         };
 
         match result {
@@ -380,6 +378,8 @@ async fn build_live_snapshot(
             }
         }
     }
+
+    drop(motors_guard);
 
     TelemetrySnapshot {
         timestamp_ms,

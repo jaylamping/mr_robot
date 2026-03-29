@@ -51,10 +51,12 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
 
   updateSnapshot: (snap) =>
     set((state) => {
-      const nextMotors: Record<number, MotorSnapshot> = {}
+      const nextMotors: Record<number, MotorSnapshot> = { ...state.motors }
       const nextHistory: Record<number, MotorSnapshot[]> = { ...state.history }
 
+      const snapshotIds = new Set<number>()
       for (const m of snap.motors) {
+        snapshotIds.add(m.can_id)
         nextMotors[m.can_id] = m
 
         const prev = nextHistory[m.can_id] ?? []
@@ -65,9 +67,10 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
             : updated
       }
 
-      for (const id of Object.keys(nextHistory)) {
+      for (const id of Object.keys(nextMotors)) {
         const n = Number(id)
-        if (!Number.isFinite(n) || nextMotors[n] === undefined) {
+        if (!Number.isFinite(n) || !snapshotIds.has(n)) {
+          delete nextMotors[n]
           delete nextHistory[n]
         }
       }
