@@ -111,6 +111,24 @@ async fn homing_from_multiple_offsets_no_false_stalls() {
     }
 }
 
+#[tokio::test]
+async fn homing_from_negative_angles_completes_without_stall_backoffs() {
+    for deg in [-50.0f32, -35.0, -20.0] {
+        let mut arm = arm_with_initial_pitch(deg.to_radians());
+        let summary = arm.startup_safe_recovery(false).await.expect("home");
+        assert_eq!(
+            summary.stall_backoffs, 0,
+            "stall backoff homing from {deg}°"
+        );
+        let j = shoulder_result(&summary);
+        assert!(
+            j.error_rad < 0.08,
+            "from {deg}°: error_rad={}",
+            j.error_rad
+        );
+    }
+}
+
 #[test]
 fn mit_control_zero_rad_encodes_decodes_via_raw_angle() {
     let typed = RobStride03Command {
@@ -169,5 +187,5 @@ fn default_startup_recovery_config_invariants() {
         c.stall_detection_min_linear_error_rad + 1e-9 >= c.approach_handoff_rad,
         "stall floor must be >= approach handoff"
     );
-    assert!(c.recovery_direct_command_within_rad >= 0.15);
+    assert!(c.recovery_direct_command_within_rad >= 0.20);
 }
