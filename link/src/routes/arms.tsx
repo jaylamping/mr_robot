@@ -267,13 +267,16 @@ function JointSlider({
   const homeError = motor?.home_error_rad != null ? motor.home_error_rad * (180 / Math.PI) : null
   const atHome = motor?.at_home ?? false
 
-  const displayDeg = dragging && dragDeg != null ? dragDeg : currentDeg
+  const rawDisplayDeg = dragging && dragDeg != null ? dragDeg : currentDeg
+  const displayDeg = rawDisplayDeg != null
+    ? Math.max(minDeg, Math.min(maxDeg, rawDisplayDeg))
+    : null
 
   const limitProximity = (() => {
-    if (displayDeg == null) return 'normal'
+    if (currentDeg == null) return 'normal'
     const marginDeg = 10
-    if (displayDeg <= minDeg || displayDeg >= maxDeg) return 'at_limit'
-    if (displayDeg - minDeg < marginDeg || maxDeg - displayDeg < marginDeg) return 'near_limit'
+    if (currentDeg <= minDeg || currentDeg >= maxDeg) return 'at_limit'
+    if (currentDeg - minDeg < marginDeg || maxDeg - currentDeg < marginDeg) return 'near_limit'
     return 'normal'
   })()
 
@@ -293,7 +296,7 @@ function JointSlider({
   }
 
   const handleSliderCommit = async (val: number | readonly number[]) => {
-    const deg = Array.isArray(val) ? val[0] : val
+    const deg = Math.max(minDeg, Math.min(maxDeg, Array.isArray(val) ? val[0] : val))
     setDragging(false)
     setDragDeg(null)
     if (!canMove) return
