@@ -707,72 +707,41 @@ impl Arm {
         updated
     }
 
-    /// Run one sweep pass: current → min → max.
-    ///
-    /// Returns `true` if the cancellation token was triggered during the pass.
-    /// The caller is responsible for driving the joint home after cancellation.
-    ///
-    /// `step_rad`: max position change per command (e.g. 0.087 rad ≈ 5°)
-    /// `step_delay_ms`: sleep between steps (e.g. 1000 ms → 5°/sec at 5° steps)
-    pub async fn sweep_joint_once(
+    /// Extract the motor arc and limit/home params needed to run a sweep without
+    /// holding the `Arm` (or its parent `state.arms` mutex) during the sweep loop.
+    pub fn sweep_context(
         &self,
         joint_name: &str,
-        step_rad: f32,
-        step_delay_ms: u64,
-        cancel: &CancellationToken,
-    ) -> Result<bool> {
+    ) -> Result<(Arc<Mutex<Motor>>, f32, f32, f32)> {
         let params = self
             .find_startup_params_by_name(joint_name)
             .ok_or_else(|| anyhow::anyhow!("Joint '{}' not configured for sweep", joint_name))?;
-        let min = params.limit_min_rad;
-        let max = params.limit_max_rad;
-
         let motor = self
             .find_motor(joint_name)
             .ok_or_else(|| anyhow::anyhow!("Joint '{}' motor not found", joint_name))?;
-
-        let mut current = motor.lock().await.read_position().await?;
-
-        for &target in &[min, max] {
-            loop {
-                if cancel.is_cancelled() {
-                    return Ok(true);
-                }
-                let err = target - current;
-                if err.abs() < 0.02 {
-                    break;
-                }
-                let step = err.clamp(-step_rad, step_rad);
-                let cmd = current + step;
-                let state = motor.lock().await.send_control(cmd, 0.0, 30.0, 1.0, 0.0).await?;
-                current = state.angle_rad;
-                tokio::time::sleep(Duration::from_millis(step_delay_ms)).await;
-            }
-        }
-
-        Ok(false)
+        Ok((Arc::clone(motor), params.limit_min_rad, params.limit_max_rad, params.home_rad))
     }
+}
 
-    /// Drive the joint back to its configured home position.
-    pub async fn sweep_joint_home(
-        &self,
-        joint_name: &str,
-        step_rad: f32,
-        step_delay_ms: u64,
-    ) -> Result<()> {
-        let params = self
-            .find_startup_params_by_name(joint_name)
-            .ok_or_else(|| anyhow::anyhow!("Joint '{}' not configured", joint_name))?;
-        let home = params.home_rad;
+/// Run one continuous sweep pass (current → min → max) using a pre-extracted motor arc.
+/// Does not hold any `Arm` or `AppState` lock during execution.
+/// Returns `true` if the cancellation token fired during the pass.
+pub async fn sweep_pass(
+    motor: &Arc<Mutex<Motor>>,
+    min: f32,
+    max: f32,
+    step_rad: f32,
+    step_delay_ms: u64,
+    cancel: &CancellationToken,
+) -> Result<bool> {
+    let mut current = motor.lock().await.read_position().await?;
 
-        let motor = self
-            .find_motor(joint_name)
-            .ok_or_else(|| anyhow::anyhow!("Joint '{}' motor not found", joint_name))?;
-
-        let mut current = motor.lock().await.read_position().await?;
-
+    for &target in &[min, max] {
         loop {
-            let err = home - current;
+            if cancel.is_cancelled() {
+                return Ok(true);
+            }
+            let err = target - current;
             if err.abs() < 0.02 {
                 break;
             }
@@ -782,7 +751,32 @@ impl Arm {
             current = state.angle_rad;
             tokio::time::sleep(Duration::from_millis(step_delay_ms)).await;
         }
-
-        Ok(())
     }
+
+    Ok(false)
+}
+
+/// Drive the joint back to its home position using a pre-extracted motor arc.
+/// Does not hold any `Arm` or `AppState` lock during execution.
+pub async fn sweep_home(
+    motor: &Arc<Mutex<Motor>>,
+    home: f32,
+    step_rad: f32,
+    step_delay_ms: u64,
+) -> Result<()> {
+    let mut current = motor.lock().await.read_position().await?;
+
+    loop {
+        let err = home - current;
+        if err.abs() < 0.02 {
+            break;
+        }
+        let step = err.clamp(-step_rad, step_rad);
+        let cmd = current + step;
+        let state = motor.lock().await.send_control(cmd, 0.0, 30.0, 1.0, 0.0).await?;
+        current = state.angle_rad;
+        tokio::time::sleep(Duration::from_millis(step_delay_ms)).await;
+    }
+
+    Ok(())
 }

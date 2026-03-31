@@ -1625,21 +1625,9 @@ async fn start_sweep(
         });
     };
 
-    // Verify the arm exists before spawning.
-    {
-        let arms = state.arms.lock().await;
-        if !arms.contains_key(&side) {
-            return Json(CommandResponse {
-                success: false,
-                error: Some(format!("Arm '{}' not found", side)),
-                angle_rad: None,
-                velocity_rads: None,
-                torque_nm: None,
-            });
-        }
-    }
-
-    // Fixed update rate; speed is controlled by step size.
+    // Extract the motor arc and limits before spawning so the task never
+    // needs to re-lock state.arms (holding that lock across await points
+    // caused all other API requests to deadlock).
     const STEP_DELAY_MS: u64 = 50;
     let speed = body
         .and_then(|b| b.speed_deg_per_sec)
@@ -1647,54 +1635,72 @@ async fn start_sweep(
         .clamp(1.0, 30.0);
     let step_rad: f32 = speed.to_radians() * (STEP_DELAY_MS as f32 / 1000.0);
 
-    let state_clone = state.clone();
+    let sweep_ctx = {
+        let arms = state.arms.lock().await;
+        match arms.get(&side) {
+            None => {
+                return Json(CommandResponse {
+                    success: false,
+                    error: Some(format!("Arm '{}' not found", side)),
+                    angle_rad: None,
+                    velocity_rads: None,
+                    torque_nm: None,
+                });
+            }
+            Some(arm) => match arm.sweep_context(&joint) {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    return Json(CommandResponse {
+                        success: false,
+                        error: Some(format!("{:#}", e)),
+                        angle_rad: None,
+                        velocity_rads: None,
+                        torque_nm: None,
+                    });
+                }
+            },
+        }
+    }; // arms lock released here
+
+    let (motor_arc, min, max, home) = sweep_ctx;
+    let token_clone = token.clone();
     let side_clone = side.clone();
     let joint_clone = joint.clone();
-    let token_clone = token.clone();
+    let state_clone = state.clone();
 
     tokio::spawn(async move {
         info!("Sweep started: {}/{} at {:.1}°/sec", side_clone, joint_clone, speed);
+
+        // Safety watchdog: auto-cancel after 10 minutes so a disconnected client
+        // can't leave a zombie sweep running indefinitely.
+        let watchdog = tokio::time::sleep(std::time::Duration::from_secs(600));
+        tokio::pin!(watchdog);
+
         loop {
-            let cancelled = {
-                let arms = state_clone.arms.lock().await;
-                match arms.get(&side_clone) {
-                    None => {
-                        warn!("Sweep: arm '{}' disappeared", side_clone);
-                        break;
-                    }
-                    Some(arm) => {
-                        match arm
-                            .sweep_joint_once(&joint_clone, step_rad, STEP_DELAY_MS, &token_clone)
-                            .await
-                        {
-                            Ok(c) => c,
-                            Err(e) => {
-                                warn!("Sweep error on {}/{}: {:#}", side_clone, joint_clone, e);
+            tokio::select! {
+                result = cortex::arm::sweep_pass(&motor_arc, min, max, step_rad, STEP_DELAY_MS, &token_clone) => {
+                    match result {
+                        Ok(cancelled) => {
+                            if cancelled || token_clone.is_cancelled() {
                                 break;
                             }
                         }
+                        Err(e) => {
+                            warn!("Sweep error on {}/{}: {:#}", side_clone, joint_clone, e);
+                            break;
+                        }
                     }
                 }
-            };
-            if cancelled || token_clone.is_cancelled() {
-                break;
+                _ = &mut watchdog => {
+                    warn!("Sweep watchdog fired for {}/{} — auto-stopping", side_clone, joint_clone);
+                    break;
+                }
             }
         }
 
-        // Return to home after sweep ends.
-        {
-            let arms = state_clone.arms.lock().await;
-            if let Some(arm) = arms.get(&side_clone) {
-                if let Err(e) = arm
-                    .sweep_joint_home(&joint_clone, step_rad, STEP_DELAY_MS)
-                    .await
-                {
-                    warn!(
-                        "Sweep home failed for {}/{}: {:#}",
-                        side_clone, joint_clone, e
-                    );
-                }
-            }
+        // Return to home — lock-free.
+        if let Err(e) = cortex::arm::sweep_home(&motor_arc, home, step_rad, STEP_DELAY_MS).await {
+            warn!("Sweep home failed for {}/{}: {:#}", side_clone, joint_clone, e);
         }
 
         // Remove the token from the map when the task finishes.
