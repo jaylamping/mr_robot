@@ -261,7 +261,7 @@ function ArmPanel({ arm }: { arm: ArmInfo }) {
         )}
 
         {arm.joints.map((joint) => (
-          <JointSlider key={joint.name} joint={joint} section={section} />
+          <JointSlider key={joint.name} joint={joint} section={section} side={arm.side} />
         ))}
 
         <Separator />
@@ -286,9 +286,11 @@ function ArmPanel({ arm }: { arm: ArmInfo }) {
 function JointSlider({
   joint,
   section,
+  side,
 }: {
   joint: ArmInfo['joints'][number];
   section: string;
+  side: string;
 }) {
   const motor = useTelemetryStore((s) =>
     joint.can_id != null ? s.motors[joint.can_id] : undefined,
@@ -513,7 +515,7 @@ function JointSlider({
   const handleStartSweep = async () => {
     setSweeping(true);
     try {
-      const res = await startSweep(section, joint.name);
+      const res = await startSweep(side, joint.name);
       if (!res.success) {
         setSweeping(false);
         toast.error(`Sweep failed for ${formatJointName(joint.name)}`, {
@@ -531,7 +533,7 @@ function JointSlider({
   const handleStopSweep = async () => {
     setSweeping(false);
     try {
-      await stopSweep(section, joint.name);
+      await stopSweep(side, joint.name);
       toast.info(`Sweep stopping for ${formatJointName(joint.name)}`, {
         description: 'Finishing current pass, then returning to home.',
       });
@@ -545,7 +547,7 @@ function JointSlider({
   useEffect(() => {
     return () => {
       if (sweeping) {
-        stopSweep(section, joint.name).catch(() => {});
+        stopSweep(side, joint.name).catch(() => {});
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -682,38 +684,6 @@ function JointSlider({
 
       {expanded && (
         <div className='ml-2 mt-2 p-3 rounded-md border bg-muted/20 space-y-3'>
-          <div className='flex items-center justify-between mb-0.5'>
-            <span className='text-[10px] font-semibold text-muted-foreground uppercase tracking-wider'>
-              Joint Settings
-            </span>
-            {!sweeping ? (
-              <Button
-                variant='outline'
-                size='sm'
-                onClick={handleStartSweep}
-                disabled={saving || !isOnline}
-                className='gap-1 h-6 text-[10px] px-2'
-                title='Continuously sweep joint between limits at ~5°/sec'
-              >
-                <LuPlay className='size-3' />
-                Sweep
-              </Button>
-            ) : (
-              <Button
-                variant='destructive'
-                size='sm'
-                onClick={handleStopSweep}
-                className='gap-1 h-6 text-[10px] px-2'
-                title='Stop sweep — finishes current pass then returns to home'
-              >
-                <LuSquare className='size-3' />
-                Stop
-              </Button>
-            )}
-          </div>
-
-          <Separator />
-
           <div>
             <h5 className='text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1'>
               <LuLocateFixed className='size-3' /> Encoder Zero
@@ -756,9 +726,35 @@ function JointSlider({
           <Separator />
 
           <div>
-            <h5 className='text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1'>
-              <LuSettings className='size-3' /> Joint Limits
-            </h5>
+            <div className='flex items-center justify-between mb-1.5'>
+              <h5 className='text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1'>
+                <LuSettings className='size-3' /> Joint Limits
+              </h5>
+              {!sweeping ? (
+                <Button
+                  variant='outline'
+                  size='sm'
+                  onClick={handleStartSweep}
+                  disabled={saving || !isOnline}
+                  className='gap-1 h-6 text-[10px] px-2'
+                  title='Continuously sweep joint between limits at ~5°/sec'
+                >
+                  <LuPlay className='size-3' />
+                  Sweep
+                </Button>
+              ) : (
+                <Button
+                  variant='destructive'
+                  size='sm'
+                  onClick={handleStopSweep}
+                  className='gap-1 h-6 text-[10px] px-2'
+                  title='Stop sweep — finishes current pass then returns to home'
+                >
+                  <LuSquare className='size-3' />
+                  Stop
+                </Button>
+              )}
+            </div>
             <div className='flex items-center gap-2'>
               <div className='flex-1'>
                 <label className='text-[10px] text-muted-foreground'>
