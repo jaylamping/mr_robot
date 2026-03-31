@@ -2,13 +2,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use robstride::ActuatorParameter;
+use robstride::actuator::{TypedCommandData, TypedFeedbackData};
+use robstride::robstride03::{RobStride03Command, RobStride03Feedback, RobStride03Parameter};
 use robstride::{
     Command, CommandData, ControlCommand, EnableCommand, FeedbackFrame, MotorMode, Protocol,
     ReadCommand, SetZeroCommand, StopCommand, TransportType, WriteCommand,
 };
-use robstride::actuator::{TypedCommandData, TypedFeedbackData};
-use robstride::robstride03::{RobStride03Command, RobStride03Feedback, RobStride03Parameter};
-use robstride::ActuatorParameter;
 use tokio::sync::Mutex;
 use tracing::info;
 
@@ -18,10 +18,7 @@ use crate::safety;
 const HOST_ID: u8 = 0xAA;
 
 pub use safety::{
-    shortest_angle_err,
-    canonical_joint_angle,
-    joint_space_error_mag,
-    motor_cmd_for_joint_target,
+    canonical_joint_angle, joint_space_error_mag, motor_cmd_for_joint_target, shortest_angle_err,
 };
 
 /// Minimum linear |error| at which stall / resistance detection may run. Raised to at least
@@ -196,7 +193,11 @@ impl Motor {
         threshold_rad: f32,
     ) -> Result<Option<f32>> {
         use std::f32::consts::TAU;
-        let threshold = if threshold_rad > 0.0 { threshold_rad } else { TAU };
+        let threshold = if threshold_rad > 0.0 {
+            threshold_rad
+        } else {
+            TAU
+        };
         let pos = self.read_position().await?;
         let err = (pos - target_rad).abs();
         if err <= threshold {
@@ -264,14 +265,20 @@ impl Motor {
         Ok(state)
     }
 
-    pub async fn move_to(&mut self, position_rad: f32, kp: Option<f32>, kd: Option<f32>) -> Result<MotorState> {
+    pub async fn move_to(
+        &mut self,
+        position_rad: f32,
+        kp: Option<f32>,
+        kd: Option<f32>,
+    ) -> Result<MotorState> {
         self.send_control(
             position_rad,
             0.0,
             kp.unwrap_or(30.0),
             kd.unwrap_or(1.0),
             0.0,
-        ).await
+        )
+        .await
     }
 
     /// One impedance step toward `target_rad` without jumping more than `max_step_rad` from
@@ -380,13 +387,12 @@ impl Motor {
                     let cj_next = (cj + step).clamp(lim.0, lim.1);
                     pos + (cj_next - cj)
                 } else {
-                    let delta = safety::step_delta_toward_home(pos, target_rad, use_short, bounded_joint);
+                    let delta =
+                        safety::step_delta_toward_home(pos, target_rad, use_short, bounded_joint);
                     let step = delta.clamp(-a_step, a_step);
                     safety::clamp_cmd_to_limits(pos + step, joint_limits_rad)
                 };
-                let state = self
-                    .send_control(cmd_pos, 0.0, kp_a, kd_a, 0.0)
-                    .await?;
+                let state = self.send_control(cmd_pos, 0.0, kp_a, kd_a, 0.0).await?;
 
                 let stall_eligible = linear_mag >= stall_min_err;
                 let looks_blocked = stall_eligible
@@ -404,8 +410,14 @@ impl Motor {
                             "startup recovery: stall; holding, backing off, then continuing scaled down"
                         );
                         let hold_pos = self.read_position().await?;
-                        self.send_control(hold_pos, 0.0, kp_soft * motion_scale, kd_soft * motion_scale, 0.0)
-                            .await?;
+                        self.send_control(
+                            hold_pos,
+                            0.0,
+                            kp_soft * motion_scale,
+                            kd_soft * motion_scale,
+                            0.0,
+                        )
+                        .await?;
                         tokio::time::sleep(backoff).await;
                         motion_scale = post_scale;
                         resistance_streak = 0;
@@ -458,7 +470,8 @@ impl Motor {
                     let cj_next = (cj + step).clamp(lim.0, lim.1);
                     pos + (cj_next - cj)
                 } else {
-                    let delta = safety::step_delta_toward_home(pos, target_rad, use_short, bounded_joint);
+                    let delta =
+                        safety::step_delta_toward_home(pos, target_rad, use_short, bounded_joint);
                     let step = delta.clamp(-cap, cap);
                     safety::clamp_cmd_to_limits(pos + step, joint_limits_rad)
                 }
@@ -474,15 +487,7 @@ impl Motor {
                 (kp_soft * motion_scale, kd_soft * motion_scale)
             };
 
-            let state = self
-                .send_control(
-                    cmd_pos,
-                    0.0,
-                    kp_cmd,
-                    kd_cmd,
-                    0.0,
-                )
-                .await?;
+            let state = self.send_control(cmd_pos, 0.0, kp_cmd, kd_cmd, 0.0).await?;
 
             let stall_eligible = linear_mag >= stall_min_err;
             let looks_blocked = stall_eligible
@@ -500,8 +505,14 @@ impl Motor {
                         "startup recovery: stall during gradual; holding and backing off"
                     );
                     let hold_pos = self.read_position().await?;
-                    self.send_control(hold_pos, 0.0, kp_soft * motion_scale, kd_soft * motion_scale, 0.0)
-                        .await?;
+                    self.send_control(
+                        hold_pos,
+                        0.0,
+                        kp_soft * motion_scale,
+                        kd_soft * motion_scale,
+                        0.0,
+                    )
+                    .await?;
                     tokio::time::sleep(backoff).await;
                     motion_scale = post_scale;
                     resistance_streak = 0;
@@ -520,7 +531,12 @@ impl Motor {
         );
     }
 
-    pub async fn move_to_deg(&mut self, degrees: f32, kp: Option<f32>, kd: Option<f32>) -> Result<MotorState> {
+    pub async fn move_to_deg(
+        &mut self,
+        degrees: f32,
+        kp: Option<f32>,
+        kd: Option<f32>,
+    ) -> Result<MotorState> {
         self.move_to(degrees.to_radians(), kp, kd).await
     }
 
@@ -542,13 +558,8 @@ impl Motor {
         )
         .map_err(|msg| anyhow::anyhow!("{}", msg))?;
 
-        self.send_control(
-            pos,
-            validated_vel,
-            0.0,
-            kd.unwrap_or(1.0),
-            0.0,
-        ).await
+        self.send_control(pos, validated_vel, 0.0, kd.unwrap_or(1.0), 0.0)
+            .await
     }
 
     /// Torque-mode command with joint limit enforcement.
@@ -568,13 +579,7 @@ impl Motor {
         )
         .map_err(|msg| anyhow::anyhow!("{}", msg))?;
 
-        self.send_control(
-            pos,
-            0.0,
-            0.0,
-            0.0,
-            validated_trq,
-        ).await
+        self.send_control(pos, 0.0, 0.0, 0.0, validated_trq).await
     }
 
     // -- Telemetry --
@@ -599,10 +604,11 @@ impl Motor {
         let (id, data) = cmd.to_can_packet(self.can_id);
 
         let mut proto = self.protocol.lock().await;
-        proto.send(id, &data).await
+        proto
+            .send(id, &data)
+            .await
             .map_err(|e| anyhow::anyhow!("{:#}", e))?;
-        let (resp_id, resp_data) = proto.recv().await
-            .map_err(|e| anyhow::anyhow!("{:#}", e))?;
+        let (resp_id, resp_data) = proto.recv().await.map_err(|e| anyhow::anyhow!("{:#}", e))?;
         drop(proto);
 
         let cmd = Command::from_can_packet(resp_id, resp_data);
@@ -611,7 +617,8 @@ impl Motor {
         if fb.motor_id != self.can_id {
             anyhow::bail!(
                 "CAN response mismatch: expected motor {}, got motor {}",
-                self.can_id, fb.motor_id
+                self.can_id,
+                fb.motor_id
             );
         }
 
@@ -630,14 +637,17 @@ impl Motor {
         };
         let (id, data) = cmd.to_can_packet(self.can_id);
         if self.debug {
-            eprintln!("  TX  id={:08X} data={:02X?}  (read param 0x{:04X} '{}')",
-                id, data, meta.index, meta.name);
+            eprintln!(
+                "  TX  id={:08X} data={:02X?}  (read param 0x{:04X} '{}')",
+                id, data, meta.index, meta.name
+            );
         }
         let mut proto = self.protocol.lock().await;
-        proto.send(id, &data).await
+        proto
+            .send(id, &data)
+            .await
             .map_err(|e| anyhow::anyhow!("{:#}", e))?;
-        let (resp_id, resp_data) = proto.recv().await
-            .map_err(|e| anyhow::anyhow!("{:#}", e))?;
+        let (resp_id, resp_data) = proto.recv().await.map_err(|e| anyhow::anyhow!("{:#}", e))?;
         drop(proto);
 
         if self.debug {
@@ -673,10 +683,11 @@ impl Motor {
         };
         let (id, data) = cmd.to_can_packet(self.can_id);
         let mut proto = self.protocol.lock().await;
-        proto.send(id, &data).await
+        proto
+            .send(id, &data)
+            .await
             .map_err(|e| anyhow::anyhow!("{:#}", e))?;
-        let (resp_id, resp_data) = proto.recv().await
-            .map_err(|e| anyhow::anyhow!("{:#}", e))?;
+        let (resp_id, resp_data) = proto.recv().await.map_err(|e| anyhow::anyhow!("{:#}", e))?;
         drop(proto);
         let resp_cmd = Command::from_can_packet(resp_id, resp_data);
         let read_resp = ReadCommand::from_command(resp_cmd);
@@ -709,12 +720,13 @@ impl Motor {
         Ok(false)
     }
 
-
     pub async fn write_param(&mut self, param: RobStride03Parameter, value: f32) -> Result<()> {
         let meta = param.metadata();
         if self.debug {
-            eprintln!("  WRITE param 0x{:04X} '{}' = {} (type={:?})",
-                meta.index, meta.name, value, meta.param_type);
+            eprintln!(
+                "  WRITE param 0x{:04X} '{}' = {} (type={:?})",
+                meta.index, meta.name, value, meta.param_type
+            );
         }
         let cmd = WriteCommand {
             host_id: self.host_id,
@@ -731,22 +743,27 @@ impl Motor {
             let comm_type = (id >> 24) & 0x1F;
             let data_2 = (id >> 8) & 0xFFFF;
             let target = id & 0x7F;
-            eprintln!("  TX  id={:08X} [comm={} d2={:04X} tgt={}] data={:02X?}",
-                id, comm_type, data_2, target, data);
+            eprintln!(
+                "  TX  id={:08X} [comm={} d2={:04X} tgt={}] data={:02X?}",
+                id, comm_type, data_2, target, data
+            );
         }
         let mut proto = self.protocol.lock().await;
-        proto.send(id, data).await
+        proto
+            .send(id, data)
+            .await
             .map_err(|e| anyhow::anyhow!("{:#}", e))?;
-        let (resp_id, resp_data) = proto.recv().await
-            .map_err(|e| anyhow::anyhow!("{:#}", e))?;
+        let (resp_id, resp_data) = proto.recv().await.map_err(|e| anyhow::anyhow!("{:#}", e))?;
         drop(proto);
 
         if self.debug {
             let comm_type = (resp_id >> 24) & 0x1F;
             let data_2 = (resp_id >> 8) & 0xFFFF;
             let target = resp_id & 0x7F;
-            eprintln!("  RX  id={:08X} [comm={} d2={:04X} tgt={}] data={:02X?}",
-                resp_id, comm_type, data_2, target, &resp_data);
+            eprintln!(
+                "  RX  id={:08X} [comm={} d2={:04X} tgt={}] data={:02X?}",
+                resp_id, comm_type, data_2, target, &resp_data
+            );
         }
 
         let cmd = Command::from_can_packet(resp_id, resp_data);
@@ -758,12 +775,24 @@ impl Motor {
         let typed = RobStride03Feedback::from_feedback_frame(fb.clone());
 
         let mut faults = Vec::new();
-        if fb.fault_undervoltage { faults.push("undervoltage"); }
-        if fb.fault_overcurrent { faults.push("overcurrent"); }
-        if fb.fault_over_temperature { faults.push("over_temperature"); }
-        if fb.fault_magnetic_encoding { faults.push("magnetic_encoding"); }
-        if fb.fault_hall_encoding { faults.push("hall_encoding"); }
-        if fb.fault_uncalibrated { faults.push("uncalibrated"); }
+        if fb.fault_undervoltage {
+            faults.push("undervoltage");
+        }
+        if fb.fault_overcurrent {
+            faults.push("overcurrent");
+        }
+        if fb.fault_over_temperature {
+            faults.push("over_temperature");
+        }
+        if fb.fault_magnetic_encoding {
+            faults.push("magnetic_encoding");
+        }
+        if fb.fault_hall_encoding {
+            faults.push("hall_encoding");
+        }
+        if fb.fault_uncalibrated {
+            faults.push("uncalibrated");
+        }
 
         MotorState {
             angle_rad: typed.angle_rad(),
@@ -795,7 +824,10 @@ mod recovery_homing_tests {
     #[test]
     fn stall_eligible_gate_matches_recovery() {
         let stall_min = 0.30f32;
-        assert!(!((0.28f32) >= stall_min), "at ~16 deg error, should not be stall-eligible");
+        assert!(
+            !((0.28f32) >= stall_min),
+            "at ~16 deg error, should not be stall-eligible"
+        );
         assert!(0.35f32 >= stall_min);
     }
 
@@ -820,7 +852,8 @@ mod recovery_homing_tests {
     fn direct_zone_covers_post_approach_band() {
         let c = StartupRecoveryConfig::default();
         assert!(c.approach_enabled);
-        let effective = (c.recovery_direct_command_within_rad as f32).max(c.approach_handoff_rad as f32);
+        let effective =
+            (c.recovery_direct_command_within_rad as f32).max(c.approach_handoff_rad as f32);
         let err_after_handoff = 0.25f32;
         assert!(
             err_after_handoff <= effective,
