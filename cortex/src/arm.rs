@@ -726,6 +726,11 @@ impl Arm {
 /// Run one continuous sweep pass (current → min → max) using a pre-extracted motor arc.
 /// Does not hold any `Arm` or `AppState` lock during execution.
 /// Returns `true` if the cancellation token fired during the pass.
+///
+/// Advances a waypoint position by `step_rad` each tick and commands the motor
+/// to that waypoint with full kp/kd gains. This produces smooth motion because
+/// the waypoint is always ahead of the motor by the accumulated step distance,
+/// not just a single tiny increment relative to feedback.
 pub async fn sweep_pass(
     motor: &Arc<Mutex<Motor>>,
     min: f32,
@@ -734,21 +739,24 @@ pub async fn sweep_pass(
     step_delay_ms: u64,
     cancel: &CancellationToken,
 ) -> Result<bool> {
-    let mut current = motor.lock().await.read_position().await?;
+    let start_pos = motor.lock().await.read_position().await?;
+    let mut waypoint = start_pos;
 
     for &target in &[min, max] {
         loop {
             if cancel.is_cancelled() {
                 return Ok(true);
             }
-            let err = target - current;
+            let err = target - waypoint;
             if err.abs() < 0.02 {
+                waypoint = target;
+                motor.lock().await.send_control(waypoint, 0.0, 30.0, 1.0, 0.0).await?;
+                tokio::time::sleep(Duration::from_millis(step_delay_ms)).await;
                 break;
             }
             let step = err.clamp(-step_rad, step_rad);
-            let cmd = current + step;
-            let state = motor.lock().await.send_control(cmd, 0.0, 30.0, 1.0, 0.0).await?;
-            current = state.angle_rad;
+            waypoint += step;
+            motor.lock().await.send_control(waypoint, 0.0, 30.0, 1.0, 0.0).await?;
             tokio::time::sleep(Duration::from_millis(step_delay_ms)).await;
         }
     }
@@ -766,17 +774,18 @@ pub async fn sweep_home(
     step_rad: f32,
     step_delay_ms: u64,
 ) -> Result<()> {
-    let mut current = motor.lock().await.read_position().await?;
+    let start_pos = motor.lock().await.read_position().await?;
+    let mut waypoint = start_pos;
 
     loop {
-        let err = home - current;
+        let err = home - waypoint;
         if err.abs() < 0.02 {
+            motor.lock().await.send_control(home, 0.0, 30.0, 1.0, 0.0).await?;
             break;
         }
         let step = err.clamp(-step_rad, step_rad);
-        let cmd = current + step;
-        let state = motor.lock().await.send_control(cmd, 0.0, 30.0, 1.0, 0.0).await?;
-        current = state.angle_rad;
+        waypoint += step;
+        motor.lock().await.send_control(waypoint, 0.0, 30.0, 1.0, 0.0).await?;
         tokio::time::sleep(Duration::from_millis(step_delay_ms)).await;
     }
 
