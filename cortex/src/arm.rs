@@ -742,9 +742,13 @@ pub async fn sweep_pass(
 
     // Read current position first, then send a gentle hold at that position
     // so the bootstrap command doesn't send the motor somewhere unexpected.
+    // Use send_control_raw throughout the sweep: the sweep does its own
+    // joint-space limit enforcement, and the raw encoder-frame commands
+    // produced by motor_cmd_for_joint_target can be on a different 2π
+    // branch than the config-frame limits, which send_control would clamp.
     let mut raw = motor.lock().await.read_position().await?;
     let hold_cmd = motor_cmd_for_joint_target(raw, canonical_joint_angle(raw, min, min, max), limits);
-    let state = motor.lock().await.send_control(hold_cmd, 0.0, 5.0, 0.5, 0.0).await?;
+    let state = motor.lock().await.send_control_raw(hold_cmd, 0.0, 5.0, 0.5, 0.0).await?;
     raw = state.angle_rad;
 
     for &target in &[min, max] {
@@ -752,16 +756,14 @@ pub async fn sweep_pass(
             if cancel.is_cancelled() {
                 return Ok(true);
             }
-            // Compute error in the joint config frame.
             let canonical = canonical_joint_angle(raw, target, min, max);
             let err = target - canonical;
             if err.abs() < 0.02 {
                 break;
             }
             let step = err.clamp(-step_rad, step_rad);
-            // Convert the joint-frame step back to a raw motor command.
             let cmd = motor_cmd_for_joint_target(raw, canonical + step, limits);
-            let state = motor.lock().await.send_control(cmd, 0.0, 30.0, 1.0, 0.0).await?;
+            let state = motor.lock().await.send_control_raw(cmd, 0.0, 30.0, 1.0, 0.0).await?;
             raw = state.angle_rad;
             tokio::time::sleep(Duration::from_millis(step_delay_ms)).await;
         }
@@ -782,10 +784,9 @@ pub async fn sweep_home(
 ) -> Result<()> {
     let limits = (min, max);
 
-    // Read current position first, then hold in place while we start stepping.
     let mut raw = motor.lock().await.read_position().await?;
     let hold_cmd = motor_cmd_for_joint_target(raw, canonical_joint_angle(raw, home, min, max), limits);
-    let state = motor.lock().await.send_control(hold_cmd, 0.0, 5.0, 0.5, 0.0).await?;
+    let state = motor.lock().await.send_control_raw(hold_cmd, 0.0, 5.0, 0.5, 0.0).await?;
     raw = state.angle_rad;
 
     loop {
@@ -796,7 +797,7 @@ pub async fn sweep_home(
         }
         let step = err.clamp(-step_rad, step_rad);
         let cmd = motor_cmd_for_joint_target(raw, canonical + step, limits);
-        let state = motor.lock().await.send_control(cmd, 0.0, 30.0, 1.0, 0.0).await?;
+        let state = motor.lock().await.send_control_raw(cmd, 0.0, 30.0, 1.0, 0.0).await?;
         raw = state.angle_rad;
         tokio::time::sleep(Duration::from_millis(step_delay_ms)).await;
     }
