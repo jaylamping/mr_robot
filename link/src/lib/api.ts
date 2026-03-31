@@ -345,6 +345,14 @@ export function runSequence(name: string): Promise<CommandResponse> {
   return fetchJson(`/sequences/${name}/run`, { method: 'POST' })
 }
 
+export function startSweep(side: string, joint: string): Promise<CommandResponse> {
+  return fetchJson(`/arms/${side}/joints/${joint}/sweep/start`, { method: 'POST' })
+}
+
+export function stopSweep(side: string, joint: string): Promise<CommandResponse> {
+  return fetchJson(`/arms/${side}/joints/${joint}/sweep/stop`, { method: 'POST' })
+}
+
 export interface JointSlot {
   section: string
   joint: string

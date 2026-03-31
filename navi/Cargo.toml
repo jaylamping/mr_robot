@@ -11,6 +11,7 @@ socketcan = ["cortex/socketcan"]
 cortex = { path = "../cortex" }
 robstride = { path = "../robstride-local" }
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"

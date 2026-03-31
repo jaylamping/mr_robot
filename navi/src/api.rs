@@ -7,6 +7,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use cortex::arm::PreflightResult;
@@ -230,6 +231,11 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/joint-slots", get(get_joint_slots))
         .route("/joints/{section}/{joint}/limits", put(update_joint_limits))
         .route("/joints/{section}/{joint}/home", put(update_joint_home))
+        .route(
+            "/arms/{side}/joints/{joint}/sweep/start",
+            post(start_sweep),
+        )
+        .route("/arms/{side}/joints/{joint}/sweep/stop", post(stop_sweep))
 }
 
 async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -966,7 +972,7 @@ async fn list_sequences() -> impl IntoResponse {
         },
         SequenceInfo {
             name: "sweep_test".into(),
-            description: "Sweep each joint through its range slowly".into(),
+            description: "Per-joint sweep — use POST /api/arms/{side}/joints/{joint}/sweep/start".into(),
         },
     ])
 }
@@ -1002,9 +1008,9 @@ async fn run_sequence(
                 }))
             }
         }
-        "wave" | "sweep_test" => Ok(Json(CommandResponse {
+        "wave" => Ok(Json(CommandResponse {
             success: false,
-            error: Some(format!("Sequence '{}' not yet implemented", name)),
+            error: Some("Sequence 'wave' not yet implemented".into()),
             angle_rad: None,
             velocity_rads: None,
             torque_nm: None,
@@ -1573,4 +1579,146 @@ fn all_configured_can_ids(config: &cortex::config::RobotConfig) -> Vec<(u8, Stri
         }
     }
     ids
+}
+
+/// `POST /api/arms/{side}/joints/{joint}/sweep/start`
+///
+/// Begins a continuous sweep of the joint between its configured limits at ~5°/sec.
+/// Returns immediately; the sweep runs in a background task until stopped.
+/// Starting a sweep while one is already active for the same joint cancels the old one.
+async fn start_sweep(
+    State(state): State<Arc<AppState>>,
+    Path((side, joint)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let key = format!("{}/{}", side, joint);
+
+    // Cancel any existing sweep for this joint.
+    {
+        let mut tokens = state.sweep_tokens.lock().await;
+        if let Some(old) = tokens.remove(&key) {
+            old.cancel();
+        }
+        let token = CancellationToken::new();
+        tokens.insert(key.clone(), token);
+    }
+
+    // Fetch the token we just inserted so the task can own a clone.
+    let token = {
+        let tokens = state.sweep_tokens.lock().await;
+        tokens.get(&key).cloned()
+    };
+    let Some(token) = token else {
+        return Json(CommandResponse {
+            success: false,
+            error: Some("Failed to create sweep token".into()),
+            angle_rad: None,
+            velocity_rads: None,
+            torque_nm: None,
+        });
+    };
+
+    // Verify the arm exists before spawning.
+    {
+        let arms = state.arms.lock().await;
+        if !arms.contains_key(&side) {
+            return Json(CommandResponse {
+                success: false,
+                error: Some(format!("Arm '{}' not found", side)),
+                angle_rad: None,
+                velocity_rads: None,
+                torque_nm: None,
+            });
+        }
+    }
+
+    // 5°/step, 1 s/step → ~5°/sec
+    const STEP_RAD: f32 = 0.087;
+    const STEP_DELAY_MS: u64 = 1000;
+
+    let state_clone = state.clone();
+    let side_clone = side.clone();
+    let joint_clone = joint.clone();
+    let token_clone = token.clone();
+
+    tokio::spawn(async move {
+        info!("Sweep started: {}/{}", side_clone, joint_clone);
+        loop {
+            let cancelled = {
+                let arms = state_clone.arms.lock().await;
+                match arms.get(&side_clone) {
+                    None => {
+                        warn!("Sweep: arm '{}' disappeared", side_clone);
+                        break;
+                    }
+                    Some(arm) => {
+                        match arm
+                            .sweep_joint_once(&joint_clone, STEP_RAD, STEP_DELAY_MS, &token_clone)
+                            .await
+                        {
+                            Ok(c) => c,
+                            Err(e) => {
+                                warn!("Sweep error on {}/{}: {:#}", side_clone, joint_clone, e);
+                                break;
+                            }
+                        }
+                    }
+                }
+            };
+            if cancelled || token_clone.is_cancelled() {
+                break;
+            }
+        }
+
+        // Return to home after sweep ends.
+        {
+            let arms = state_clone.arms.lock().await;
+            if let Some(arm) = arms.get(&side_clone) {
+                if let Err(e) = arm
+                    .sweep_joint_home(&joint_clone, STEP_RAD, STEP_DELAY_MS)
+                    .await
+                {
+                    warn!(
+                        "Sweep home failed for {}/{}: {:#}",
+                        side_clone, joint_clone, e
+                    );
+                }
+            }
+        }
+
+        // Remove the token from the map when the task finishes.
+        let key = format!("{}/{}", side_clone, joint_clone);
+        state_clone.sweep_tokens.lock().await.remove(&key);
+        info!("Sweep finished: {}/{}", side_clone, joint_clone);
+    });
+
+    Json(CommandResponse {
+        success: true,
+        error: None,
+        angle_rad: None,
+        velocity_rads: None,
+        torque_nm: None,
+    })
+}
+
+/// `POST /api/arms/{side}/joints/{joint}/sweep/stop`
+///
+/// Signals the active sweep for this joint to stop after finishing its current pass,
+/// then return to home. Idempotent — returns success even if no sweep is active.
+async fn stop_sweep(
+    State(state): State<Arc<AppState>>,
+    Path((side, joint)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let key = format!("{}/{}", side, joint);
+    let mut tokens = state.sweep_tokens.lock().await;
+    if let Some(token) = tokens.remove(&key) {
+        token.cancel();
+        info!("Sweep stop requested: {}", key);
+    }
+    Json(CommandResponse {
+        success: true,
+        error: None,
+        angle_rad: None,
+        velocity_rads: None,
+        torque_nm: None,
+    })
 }

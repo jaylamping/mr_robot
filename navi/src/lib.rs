@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use axum::Router;
 use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -38,6 +39,8 @@ pub struct AppState {
     pub log_buffer: LogBuffer,
     /// When true, spin/torque API skips strict limit-direction rejection (LAN-trusted commissioning).
     pub commissioning_enabled: Arc<AtomicBool>,
+    /// Active sweep cancellation tokens, keyed by "{side}/{joint}".
+    pub sweep_tokens: Mutex<HashMap<String, CancellationToken>>,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {

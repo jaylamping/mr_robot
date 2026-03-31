@@ -1,7 +1,8 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import type { ArmInfo, CommandResponse, HomeResponse } from '@/lib/api';
+import { startSweep, stopSweep } from '@/lib/api';
 import { useRobotArmPreflight, useRobotArms } from '@/lib/queries';
 import {
   useEnableArmMutation,
@@ -41,6 +42,8 @@ import {
   LuChevronDown,
   LuChevronRight,
   LuLocateFixed,
+  LuSquare,
+  LuPlay,
 } from 'react-icons/lu';
 
 export const Route = createFileRoute('/arms')({
@@ -297,6 +300,7 @@ function JointSlider({
   const [saving, setSaving] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [dragDeg, setDragDeg] = useState<number | null>(null);
+  const [sweeping, setSweeping] = useState(false);
   const limitsMut = useUpdateJointLimitsMutation();
   const homeMut = useUpdateJointHomeMutation();
   const moveMut = useMoveMotorMutation();
@@ -506,6 +510,47 @@ function JointSlider({
     }
   };
 
+  const handleStartSweep = async () => {
+    setSweeping(true);
+    try {
+      const res = await startSweep(section, joint.name);
+      if (!res.success) {
+        setSweeping(false);
+        toast.error(`Sweep failed for ${formatJointName(joint.name)}`, {
+          description: res.error,
+        });
+      }
+    } catch (e) {
+      setSweeping(false);
+      toast.error(`Sweep error for ${formatJointName(joint.name)}`, {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
+  const handleStopSweep = async () => {
+    setSweeping(false);
+    try {
+      await stopSweep(section, joint.name);
+      toast.info(`Sweep stopping for ${formatJointName(joint.name)}`, {
+        description: 'Finishing current pass, then returning to home.',
+      });
+    } catch (e) {
+      toast.error(`Stop sweep failed for ${formatJointName(joint.name)}`, {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (sweeping) {
+        stopSweep(section, joint.name).catch(() => {});
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sweeping]);
+
   const handleZeroAndSetHome = async () => {
     if (joint.can_id == null) return;
     if (
@@ -637,6 +682,38 @@ function JointSlider({
 
       {expanded && (
         <div className='ml-2 mt-2 p-3 rounded-md border bg-muted/20 space-y-3'>
+          <div className='flex items-center justify-between mb-0.5'>
+            <span className='text-[10px] font-semibold text-muted-foreground uppercase tracking-wider'>
+              Joint Settings
+            </span>
+            {!sweeping ? (
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={handleStartSweep}
+                disabled={saving || !isOnline}
+                className='gap-1 h-6 text-[10px] px-2'
+                title='Continuously sweep joint between limits at ~5°/sec'
+              >
+                <LuPlay className='size-3' />
+                Sweep
+              </Button>
+            ) : (
+              <Button
+                variant='destructive'
+                size='sm'
+                onClick={handleStopSweep}
+                className='gap-1 h-6 text-[10px] px-2'
+                title='Stop sweep — finishes current pass then returns to home'
+              >
+                <LuSquare className='size-3' />
+                Stop
+              </Button>
+            )}
+          </div>
+
+          <Separator />
+
           <div>
             <h5 className='text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1'>
               <LuLocateFixed className='size-3' /> Encoder Zero
@@ -759,6 +836,7 @@ function JointSlider({
               </Button>
             </div>
           </div>
+
         </div>
       )}
     </div>
