@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -165,6 +166,7 @@ async fn main() -> Result<()> {
         mode,
         transport_type,
         log_buffer,
+        commissioning_enabled: Arc::new(AtomicBool::new(false)),
     });
 
     let telem_state = state.clone();

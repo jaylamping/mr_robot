@@ -54,6 +54,10 @@ export interface ServerStatus {
   transport_type: string
 }
 
+export interface CommissioningResponse {
+  enabled: boolean
+}
+
 export interface ArmInfo {
   side: string
   joints: ArmJointInfo[]
@@ -156,6 +160,18 @@ export function getConfig(): Promise<RobotConfig> {
 
 export function getStatus(): Promise<ServerStatus> {
   return fetchJson('/status')
+}
+
+export function getCommissioning(): Promise<CommissioningResponse> {
+  return fetchJson('/safety/commissioning')
+}
+
+export function setCommissioning(enabled: boolean): Promise<CommissioningResponse> {
+  return fetchJson('/safety/commissioning', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
 }
 
 export function getMotors(): Promise<MotorInfo[]> {

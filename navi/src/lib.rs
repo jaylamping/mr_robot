@@ -3,6 +3,7 @@ pub mod log_buffer;
 pub mod telemetry;
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -33,6 +34,8 @@ pub struct AppState {
     pub mode: String,
     pub transport_type: String,
     pub log_buffer: LogBuffer,
+    /// When true, spin/torque API skips strict limit-direction rejection (LAN-trusted commissioning).
+    pub commissioning_enabled: Arc<AtomicBool>,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {

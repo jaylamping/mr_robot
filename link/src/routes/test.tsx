@@ -1,7 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import type { CommandResponse, SequenceInfo } from '@/lib/api'
+import {
+  getCommissioning,
+  setCommissioning,
+  type CommandResponse,
+  type SequenceInfo,
+} from '@/lib/api'
 import { useRobotMotors, useRobotSequences } from '@/lib/queries'
 import {
   useDiscoverMutation,
@@ -24,6 +29,7 @@ import { Input } from '@/components/ui/input'
 import { Slider } from '@/components/ui/slider'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import {
   Select,
   SelectContent,
@@ -58,6 +64,8 @@ function TestPage() {
 
   const [selectedMotorId, setSelectedMotorId] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
+  const [commissioning, setCommissioningState] = useState(false)
+  const [commissioningLoading, setCommissioningLoading] = useState(true)
 
   const motors = motorsQ.data ?? []
   const sequences = sequencesQ.data ?? []
@@ -77,6 +85,47 @@ function TestPage() {
       toast.error('Failed to load sequences', { description: sequencesQ.error.message })
     }
   }, [motorsQ.isError, motorsQ.error, sequencesQ.isError, sequencesQ.error])
+
+  useEffect(() => {
+    let cancelled = false
+    setCommissioningLoading(true)
+    void getCommissioning()
+      .then((r) => {
+        if (!cancelled) setCommissioningState(r.enabled)
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          toast.error('Failed to load commissioning status', {
+            description: e instanceof Error ? e.message : String(e),
+          })
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCommissioningLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  async function handleCommissioningChange(checked: boolean) {
+    setCommissioningLoading(true)
+    try {
+      const r = await setCommissioning(checked)
+      setCommissioningState(r.enabled)
+      toast.success(r.enabled ? 'Commissioning mode enabled' : 'Commissioning mode off', {
+        description: r.enabled
+          ? 'Spin/torque API will not reject near-limit commands. Server logs this.'
+          : 'Strict limit-direction checks apply to spin and torque.',
+      })
+    } catch (e) {
+      toast.error('Could not update commissioning mode', {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setCommissioningLoading(false)
+    }
+  }
 
   async function handleDiscover() {
     try {
@@ -149,7 +198,7 @@ function TestPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <h2 className="text-xl font-semibold">Test Panel</h2>
         <div className="flex items-center gap-3">
           <Button
@@ -172,6 +221,42 @@ function TestPage() {
             <LuOctagonX className="size-5" />
             E-STOP ALL
           </Button>
+        </div>
+      </div>
+
+      <div
+        className={`rounded-lg border p-4 space-y-3 ${
+          commissioning
+            ? 'border-amber-500/50 bg-amber-500/10'
+            : 'border-border bg-muted/30'
+        }`}
+      >
+        <p className="text-sm text-foreground/90 leading-relaxed">
+          Velocity and torque tests can drive joints toward their limits. Use E-STOP if anything moves
+          unexpectedly. With commissioning off, the server rejects spin/torque that would push into the
+          soft zone toward a limit; enabling commissioning relaxes that check (LAN-trusted, logged on
+          the robot).
+        </p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Switch
+              id="commissioning"
+              checked={commissioning}
+              disabled={commissioningLoading}
+              onCheckedChange={(v) => void handleCommissioningChange(v)}
+            />
+            <label htmlFor="commissioning" className="text-sm font-medium cursor-pointer">
+              Commissioning mode
+            </label>
+            {commissioning && (
+              <Badge variant="outline" className="border-amber-600 text-amber-700 dark:text-amber-400">
+                ON
+              </Badge>
+            )}
+          </div>
+          {commissioningLoading && (
+            <span className="text-xs text-muted-foreground">Syncing…</span>
+          )}
         </div>
       </div>
 
@@ -251,11 +336,21 @@ function TestPage() {
                     </TabsContent>
 
                     <TabsContent value="spin" className="pt-3">
-                      <SpinTab canId={selectedMotorId} busy={busy} exec={exec} />
+                      <SpinTab
+                        canId={selectedMotorId}
+                        busy={busy}
+                        exec={exec}
+                        commissioning={commissioning}
+                      />
                     </TabsContent>
 
                     <TabsContent value="torque" className="pt-3">
-                      <TorqueTab canId={selectedMotorId} busy={busy} exec={exec} />
+                      <TorqueTab
+                        canId={selectedMotorId}
+                        busy={busy}
+                        exec={exec}
+                        commissioning={commissioning}
+                      />
                     </TabsContent>
 
                     <TabsContent value="position" className="pt-3">
@@ -409,13 +504,28 @@ function JogTab({ canId, busy, exec }: { canId: number; busy: boolean; exec: Exe
   )
 }
 
-function SpinTab({ canId, busy, exec }: { canId: number; busy: boolean; exec: ExecFn }) {
+function SpinTab({
+  canId,
+  busy,
+  exec,
+  commissioning,
+}: {
+  canId: number
+  busy: boolean
+  exec: ExecFn
+  commissioning: boolean
+}) {
   const spinMut = useSpinMotorMutation()
   const [velocity, setVelocity] = useState(0)
   const [kd, setKd] = useState(1)
 
   return (
     <div className="space-y-3">
+      {!commissioning && (
+        <p className="text-xs text-muted-foreground">
+          Near joint limits, start spin may be rejected. Turn on commissioning mode to override.
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-2">
         <LabeledInput label="Velocity (rad/s)" value={velocity} onChange={setVelocity} step={0.5} min={-10} max={10} />
         <LabeledInput label="kd" value={kd} onChange={setKd} step={0.1} min={0} max={100} />
@@ -461,12 +571,27 @@ function SpinTab({ canId, busy, exec }: { canId: number; busy: boolean; exec: Ex
   )
 }
 
-function TorqueTab({ canId, busy, exec }: { canId: number; busy: boolean; exec: ExecFn }) {
+function TorqueTab({
+  canId,
+  busy,
+  exec,
+  commissioning,
+}: {
+  canId: number
+  busy: boolean
+  exec: ExecFn
+  commissioning: boolean
+}) {
   const torqueMut = useTorqueMotorMutation()
   const [torque, setTorque] = useState(0)
 
   return (
     <div className="space-y-3">
+      {!commissioning && (
+        <p className="text-xs text-muted-foreground">
+          Near joint limits, torque commands may be rejected. Turn on commissioning mode to override.
+        </p>
+      )}
       <LabeledInput label="Torque (N·m)" value={torque} onChange={setTorque} step={0.5} min={-30} max={30} />
       <div className="relative pt-1 pb-2">
         <Slider

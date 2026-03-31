@@ -79,6 +79,47 @@ fn clamp_cmd_to_limits(cmd: f32, joint_limits_rad: Option<(f32, f32)>) -> f32 {
     joint_limits_rad.map_or(cmd, |(lo, hi)| cmd.clamp(lo, hi))
 }
 
+/// Scale factor (0.0–1.0) for velocity or torque near joint limits. Used by [`Motor::send_control`] and unit tests.
+#[inline]
+fn soft_limit_effort_scale_pure(
+    joint_limits: Option<(f32, f32)>,
+    last_known_position: Option<f32>,
+    margin_rad: f32,
+    signed_effort: f32,
+) -> f32 {
+    let (lo, hi) = match joint_limits {
+        Some(l) => l,
+        None => return 1.0,
+    };
+    let pos = match last_known_position {
+        Some(p) => p,
+        None => return 1.0,
+    };
+    let margin = margin_rad;
+    if margin <= 0.0 {
+        return 1.0;
+    }
+
+    if signed_effort > 0.0 {
+        let dist_to_max = hi - pos;
+        if dist_to_max <= 0.0 {
+            return 0.0;
+        }
+        if dist_to_max < margin {
+            return (dist_to_max / margin).clamp(0.0, 1.0);
+        }
+    } else if signed_effort < 0.0 {
+        let dist_to_min = pos - lo;
+        if dist_to_min <= 0.0 {
+            return 0.0;
+        }
+        if dist_to_min < margin {
+            return (dist_to_min / margin).clamp(0.0, 1.0);
+        }
+    }
+    1.0
+}
+
 /// Linear error in the encoder frame (not wrapped). Use for "at home?" and "still far?" only.
 #[inline]
 fn linear_error(pos_rad: f32, target_rad: f32) -> f32 {
@@ -169,45 +210,25 @@ impl Motor {
         self.joint_limits
     }
 
+    pub fn soft_limit_margin_rad(&self) -> f32 {
+        self.soft_limit_margin_rad
+    }
+
     pub fn set_soft_limit_margin(&mut self, margin_rad: f32) {
         self.soft_limit_margin_rad = margin_rad.max(0.0);
     }
 
-    /// Compute a velocity scale factor (0.0–1.0) based on proximity to joint limits.
+    /// Scale factor (0.0–1.0) for velocity or torque based on proximity to joint limits.
+    /// Same geometry for both: positive effort pushes toward max, negative toward min.
     /// Returns 1.0 if no limits are set or the motor is not near a boundary in the
-    /// direction of `velocity_rads`.
-    fn soft_limit_velocity_scale(&self, velocity_rads: f32) -> f32 {
-        let (lo, hi) = match self.joint_limits {
-            Some(l) => l,
-            None => return 1.0,
-        };
-        let pos = match self.last_known_position {
-            Some(p) => p,
-            None => return 1.0,
-        };
-        let margin = self.soft_limit_margin_rad;
-        if margin <= 0.0 {
-            return 1.0;
-        }
-
-        if velocity_rads > 0.0 {
-            let dist_to_max = hi - pos;
-            if dist_to_max <= 0.0 {
-                return 0.0;
-            }
-            if dist_to_max < margin {
-                return (dist_to_max / margin).clamp(0.0, 1.0);
-            }
-        } else if velocity_rads < 0.0 {
-            let dist_to_min = pos - lo;
-            if dist_to_min <= 0.0 {
-                return 0.0;
-            }
-            if dist_to_min < margin {
-                return (dist_to_min / margin).clamp(0.0, 1.0);
-            }
-        }
-        1.0
+    /// direction of `signed_effort`.
+    fn soft_limit_effort_scale(&self, signed_effort: f32) -> f32 {
+        soft_limit_effort_scale_pure(
+            self.joint_limits,
+            self.last_known_position,
+            self.soft_limit_margin_rad,
+            signed_effort,
+        )
     }
 
     // -- Lifecycle --
@@ -303,12 +324,20 @@ impl Motor {
 
         let clamped_pos = clamp_cmd_to_limits(position_rad, self.joint_limits);
 
-        let scale = self.soft_limit_velocity_scale(velocity_rads);
-        let clamped_vel = velocity_rads * scale;
-        let clamped_torque = if scale < 1.0 && torque_nm.abs() > 0.0 {
-            torque_nm * scale
+        let vel_scale = self.soft_limit_effort_scale(velocity_rads);
+        let clamped_vel = velocity_rads * vel_scale;
+
+        // Pure torque (velocity ~0): scale by limit proximity using torque sign as effort direction.
+        // When both are non-zero, velocity scale also scales torque (prior behavior).
+        let clamped_torque = if velocity_rads.abs() > f32::EPSILON {
+            if vel_scale < 1.0 && torque_nm.abs() > 0.0 {
+                torque_nm * vel_scale
+            } else {
+                torque_nm
+            }
         } else {
-            torque_nm
+            let t_scale = self.soft_limit_effort_scale(torque_nm);
+            torque_nm * t_scale
         };
 
         let typed = RobStride03Command {
@@ -601,6 +630,7 @@ impl Motor {
     }
 
     pub async fn spin(&mut self, velocity_rads: f32, kd: Option<f32>) -> Result<MotorState> {
+        self.read_position().await?;
         self.send_control(
             0.0,
             velocity_rads.clamp(-10.0, 10.0),
@@ -611,6 +641,7 @@ impl Motor {
     }
 
     pub async fn set_torque(&mut self, torque_nm: f32) -> Result<MotorState> {
+        self.read_position().await?;
         self.send_control(
             0.0,
             0.0,
@@ -1003,6 +1034,59 @@ mod recovery_homing_tests {
             motion_scale = 1.0;
         }
         assert_eq!(motion_scale, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod soft_limit_effort_tests {
+    use super::soft_limit_effort_scale_pure;
+
+    #[test]
+    fn no_limits_full_scale() {
+        assert_eq!(
+            soft_limit_effort_scale_pure(None, Some(0.5), 0.175, 2.0),
+            1.0
+        );
+    }
+
+    #[test]
+    fn no_position_full_scale() {
+        assert_eq!(
+            soft_limit_effort_scale_pure(Some((-1.0, 1.0)), None, 0.175, 2.0),
+            1.0
+        );
+    }
+
+    #[test]
+    fn positive_effort_ramps_near_max() {
+        let limits = Some((-1.0, 1.0));
+        let m = 0.175f32;
+        let pos = 1.0 - 0.05;
+        let s = soft_limit_effort_scale_pure(limits, Some(pos), m, 1.0);
+        assert!((s - (0.05 / m)).abs() < 1e-5, "s={s}");
+    }
+
+    #[test]
+    fn positive_effort_zero_past_max() {
+        let s = soft_limit_effort_scale_pure(Some((-1.0, 1.0)), Some(1.01), 0.175, 1.0);
+        assert_eq!(s, 0.0);
+    }
+
+    #[test]
+    fn negative_effort_ramps_near_min() {
+        let limits = Some((-1.0, 1.0));
+        let m = 0.175f32;
+        let pos = -1.0 + 0.05;
+        let s = soft_limit_effort_scale_pure(limits, Some(pos), m, -1.0);
+        assert!((s - (0.05 / m)).abs() < 1e-5, "s={s}");
+    }
+
+    #[test]
+    fn zero_effort_returns_full_scale() {
+        assert_eq!(
+            soft_limit_effort_scale_pure(Some((-1.0, 1.0)), Some(0.0), 0.175, 0.0),
+            1.0
+        );
     }
 }
 

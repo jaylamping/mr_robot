@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -6,7 +7,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 use cortex::arm::PreflightResult;
 use cortex::motor::Motor;
@@ -73,6 +74,16 @@ struct StatusResponse {
     mode: String,
     motor_count: usize,
     transport_type: String,
+}
+
+#[derive(Serialize)]
+struct CommissioningResponse {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct CommissioningRequest {
+    enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -183,6 +194,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/config", get(get_config))
         .route("/cert-hash", get(get_cert_hash))
         .route("/status", get(get_status))
+        .route(
+            "/safety/commissioning",
+            get(get_commissioning).post(set_commissioning),
+        )
         .route("/motors", get(get_motors))
         .route("/motors/{id}", get(get_motor))
         .route("/motors/{id}/enable", post(enable_motor))
@@ -226,6 +241,30 @@ async fn get_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         mode: state.mode.clone(),
         motor_count: motors.len(),
         transport_type: state.transport_type.clone(),
+    })
+}
+
+/// LAN-trusted toggle: when enabled, `/motors/{id}/spin` and `/torque` skip strict limit-direction checks.
+async fn get_commissioning(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(CommissioningResponse {
+        enabled: state.commissioning_enabled.load(Ordering::SeqCst),
+    })
+}
+
+async fn set_commissioning(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CommissioningRequest>,
+) -> impl IntoResponse {
+    state
+        .commissioning_enabled
+        .store(req.enabled, Ordering::SeqCst);
+    if req.enabled {
+        warn!(
+            "commissioning mode ENABLED — spin/torque limit-direction API rejection disabled (LAN-trusted; no auth)"
+        );
+    }
+    Json(CommissioningResponse {
+        enabled: state.commissioning_enabled.load(Ordering::SeqCst),
     })
 }
 
@@ -708,6 +747,61 @@ async fn set_arm_pose(
     }))
 }
 
+/// When commissioning is off, rejects spin/torque that would push into the soft zone toward a limit.
+fn reject_effort_if_limit_violation(
+    pos_rad: f32,
+    limits: Option<(f32, f32)>,
+    margin_rad: f32,
+    signed_effort: f32,
+) -> Option<String> {
+    const EPS: f32 = 1e-4;
+    const EFFORT_EPS: f32 = 1e-6;
+
+    let (lo, hi) = limits?;
+
+    if signed_effort.abs() < EFFORT_EPS {
+        return None;
+    }
+
+    if pos_rad < lo - EPS || pos_rad > hi + EPS {
+        return Some(format!(
+            "joint position {:.3} rad outside limits [{:.3}, {:.3}] — enable commissioning or move back in range",
+            pos_rad, lo, hi
+        ));
+    }
+
+    if signed_effort > 0.0 {
+        let dist_to_max = hi - pos_rad;
+        if dist_to_max <= EPS {
+            return Some(format!(
+                "effort toward max limit while at or past upper bound (pos {:.3}, max {:.3})",
+                pos_rad, hi
+            ));
+        }
+        if dist_to_max < margin_rad {
+            return Some(format!(
+                "command would push toward max within {:.1}° of limit — enable commissioning to override",
+                margin_rad.to_degrees()
+            ));
+        }
+    } else {
+        let dist_to_min = pos_rad - lo;
+        if dist_to_min <= EPS {
+            return Some(format!(
+                "effort toward min limit while at or past lower bound (pos {:.3}, min {:.3})",
+                pos_rad, lo
+            ));
+        }
+        if dist_to_min < margin_rad {
+            return Some(format!(
+                "command would push toward min within {:.1}° of limit — enable commissioning to override",
+                margin_rad.to_degrees()
+            ));
+        }
+    }
+    None
+}
+
 async fn spin_motor(
     State(state): State<Arc<AppState>>,
     Path(id): Path<u8>,
@@ -715,6 +809,41 @@ async fn spin_motor(
 ) -> Result<impl IntoResponse, StatusCode> {
     let mut motors = state.motors.lock().await;
     let motor = motors.get_mut(&id).ok_or(StatusCode::NOT_FOUND)?;
+
+    if !state
+        .commissioning_enabled
+        .load(Ordering::SeqCst)
+    {
+        match motor.read_position().await {
+            Ok(pos) => {
+                let margin = motor.soft_limit_margin_rad();
+                if let Some(msg) = reject_effort_if_limit_violation(
+                    pos,
+                    motor.joint_limits(),
+                    margin,
+                    req.velocity_rads,
+                ) {
+                    return Ok(Json(CommandResponse {
+                        success: false,
+                        error: Some(msg),
+                        angle_rad: Some(pos),
+                        velocity_rads: None,
+                        torque_nm: None,
+                    }));
+                }
+            }
+            Err(e) => {
+                return Ok(Json(CommandResponse {
+                    success: false,
+                    error: Some(format!("Failed to read position: {:#}", e)),
+                    angle_rad: None,
+                    velocity_rads: None,
+                    torque_nm: None,
+                }));
+            }
+        }
+    }
+
     match motor.spin(req.velocity_rads, req.kd).await {
         Ok(ms) => Ok(Json(CommandResponse {
             success: true,
@@ -740,6 +869,42 @@ async fn torque_motor(
 ) -> Result<impl IntoResponse, StatusCode> {
     let mut motors = state.motors.lock().await;
     let motor = motors.get_mut(&id).ok_or(StatusCode::NOT_FOUND)?;
+
+    if !state
+        .commissioning_enabled
+        .load(Ordering::SeqCst)
+    {
+        // Positive torque assumed to increase reported joint angle (same sign convention as velocity for limits).
+        match motor.read_position().await {
+            Ok(pos) => {
+                let margin = motor.soft_limit_margin_rad();
+                if let Some(msg) = reject_effort_if_limit_violation(
+                    pos,
+                    motor.joint_limits(),
+                    margin,
+                    req.torque_nm,
+                ) {
+                    return Ok(Json(CommandResponse {
+                        success: false,
+                        error: Some(msg),
+                        angle_rad: Some(pos),
+                        velocity_rads: None,
+                        torque_nm: None,
+                    }));
+                }
+            }
+            Err(e) => {
+                return Ok(Json(CommandResponse {
+                    success: false,
+                    error: Some(format!("Failed to read position: {:#}", e)),
+                    angle_rad: None,
+                    velocity_rads: None,
+                    torque_nm: None,
+                }));
+            }
+        }
+    }
+
     match motor.set_torque(req.torque_nm).await {
         Ok(ms) => Ok(Json(CommandResponse {
             success: true,
