@@ -8,8 +8,9 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::config::{ArmConfig, StartupRecoveryConfig};
-use crate::motor::{
-    canonical_joint_angle, joint_space_error_mag, motor_cmd_for_joint_target, Motor,
+use crate::motor::Motor;
+use crate::safety::{
+    canonical_joint_angle, joint_space_error_mag, motor_cmd_for_joint_target,
 };
 
 // -- Homing result types --
@@ -144,6 +145,7 @@ impl Arm {
 
                 let mut motor = Motor::new(protocol.clone(), can_id);
                 motor.set_joint_limits(joint.limits.0 as f32, joint.limits.1 as f32);
+                motor.set_home_rad(home_rad);
 
                 joint_startup.push((
                     name.to_string(),
@@ -684,13 +686,20 @@ impl Arm {
     }
 
     pub fn update_joint_home(&mut self, joint_name: &str, home_rad: f32) -> bool {
+        let mut updated = false;
         for (n, p) in &mut self.joint_startup {
             if n == joint_name {
                 p.home_rad = home_rad;
-                return true;
+                updated = true;
+                break;
             }
         }
-        false
+        if updated {
+            if let Some(motor) = self.find_motor_mut(joint_name) {
+                motor.set_home_rad(home_rad);
+            }
+        }
+        updated
     }
 
     /// Get motor by CAN ID (for API-level motor commands).

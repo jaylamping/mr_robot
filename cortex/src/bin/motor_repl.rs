@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::Result;
 use cortex::config::RobotConfig;
 use cortex::motor::{create_ch341_protocol, Motor};
+use cortex::safety;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,6 +20,18 @@ async fn main() -> Result<()> {
 
     let protocol = create_ch341_protocol(&config.bus.port).await?;
     let mut motor = Motor::new(protocol, can_id);
+
+    if let Some((lo, hi)) = safety::limits_for_motor(&config, can_id) {
+        motor.set_joint_limits(lo, hi);
+        println!("Joint limits: [{:.1}°, {:.1}°] ({:.3}, {:.3} rad)",
+            lo.to_degrees(), hi.to_degrees(), lo, hi);
+    } else {
+        println!("No joint limits configured for CAN ID {}", can_id);
+    }
+    if let Some(home) = safety::home_for_motor(&config, can_id) {
+        motor.set_home_rad(home);
+        println!("Home position: {:.1}° ({:.3} rad)", home.to_degrees(), home);
+    }
 
     println!("Transport ready. Type 'help' for commands.\n");
 

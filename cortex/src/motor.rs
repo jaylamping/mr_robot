@@ -13,141 +13,20 @@ use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::config::{BusConfig, StartupRecoveryConfig};
+use crate::safety;
 
 const HOST_ID: u8 = 0xAA;
 
-/// Default soft-limit margin in radians (~10 degrees). Velocity/torque commands ramp
-/// down linearly within this zone when pushing toward a limit.
-const DEFAULT_SOFT_LIMIT_MARGIN_RAD: f32 = 0.175;
-
-/// Signed smallest angle from `from_rad` to `to_rad`, in (‑π, π]: move along the shorter arc on a circle.
-#[inline]
-pub fn shortest_angle_err(from_rad: f32, to_rad: f32) -> f32 {
-    use std::f32::consts::{PI, TAU};
-    let d = to_rad - from_rad;
-    (d + PI).rem_euclid(TAU) - PI
-}
-
-/// Epsilon (rad) when testing whether a candidate `pos + n·2π` lies inside joint limits.
-const JOINT_UNWRAP_EPS: f32 = 0.12;
-
-/// Pick the representative of `pos_rad` modulo 2π that lies in `[limit_lo, limit_hi]` (with slack).
-/// If several candidates fit (range > 2π), choose the one closest to `home_rad`.
-///
-/// After power loss the RS03 may report the same physical pose on a different 2π branch than
-/// `home_rad` / limits (e.g. ~330° linear error vs ~30° real). This maps the raw reading into the
-/// joint configuration frame.
-pub fn canonical_joint_angle(
-    pos_rad: f32,
-    home_rad: f32,
-    limit_lo: f32,
-    limit_hi: f32,
-) -> f32 {
-    use std::f32::consts::TAU;
-    let mut best: Option<(f32, f32)> = None;
-    for k in -4..=4 {
-        let p = pos_rad + (k as f32) * TAU;
-        if p >= limit_lo - JOINT_UNWRAP_EPS && p <= limit_hi + JOINT_UNWRAP_EPS {
-            let d = (p - home_rad).abs();
-            match best {
-                None => best = Some((p, d)),
-                Some((_, bd)) if d < bd => best = Some((p, d)),
-                _ => {}
-            }
-        }
-    }
-    best.map(|(p, _)| p).unwrap_or(pos_rad)
-}
-
-/// Error vs joint home using the canonical 2π branch inside limits (see [`canonical_joint_angle`]).
-#[inline]
-pub fn joint_space_error_mag(pos_raw: f32, target_rad: f32, limits: (f32, f32)) -> f32 {
-    let cj = canonical_joint_angle(pos_raw, target_rad, limits.0, limits.1);
-    (cj - target_rad).abs()
-}
-
-/// Raw MIT position command that corresponds to joint angle `target_rad` when the motor currently
-/// reads `pos_raw` (handles branch mismatch between feedback and config frame).
-#[inline]
-pub fn motor_cmd_for_joint_target(pos_raw: f32, target_rad: f32, limits: (f32, f32)) -> f32 {
-    let cj = canonical_joint_angle(pos_raw, target_rad, limits.0, limits.1);
-    pos_raw + target_rad - cj
-}
-
-#[inline]
-fn clamp_cmd_to_limits(cmd: f32, joint_limits_rad: Option<(f32, f32)>) -> f32 {
-    joint_limits_rad.map_or(cmd, |(lo, hi)| cmd.clamp(lo, hi))
-}
-
-/// Scale factor (0.0–1.0) for velocity or torque near joint limits. Used by [`Motor::send_control`] and unit tests.
-#[inline]
-fn soft_limit_effort_scale_pure(
-    joint_limits: Option<(f32, f32)>,
-    last_known_position: Option<f32>,
-    margin_rad: f32,
-    signed_effort: f32,
-) -> f32 {
-    let (lo, hi) = match joint_limits {
-        Some(l) => l,
-        None => return 1.0,
-    };
-    let pos = match last_known_position {
-        Some(p) => p,
-        None => return 1.0,
-    };
-    let margin = margin_rad;
-    if margin <= 0.0 {
-        return 1.0;
-    }
-
-    if signed_effort > 0.0 {
-        let dist_to_max = hi - pos;
-        if dist_to_max <= 0.0 {
-            return 0.0;
-        }
-        if dist_to_max < margin {
-            return (dist_to_max / margin).clamp(0.0, 1.0);
-        }
-    } else if signed_effort < 0.0 {
-        let dist_to_min = pos - lo;
-        if dist_to_min <= 0.0 {
-            return 0.0;
-        }
-        if dist_to_min < margin {
-            return (dist_to_min / margin).clamp(0.0, 1.0);
-        }
-    }
-    1.0
-}
-
-/// Linear error in the encoder frame (not wrapped). Use for "at home?" and "still far?" only.
-#[inline]
-fn linear_error(pos_rad: f32, target_rad: f32) -> f32 {
-    target_rad - pos_rad
-}
-
-/// Step direction toward target. With **bounded** joints (`joint_limits` in use), always linear —
-/// shortest arc is wrong for a limited range and can command a ~270° wrap the mechanics can't mean.
-/// Otherwise, shortest arc only when linear error `> π` and `prefer_shortest_angle`.
-#[inline]
-fn step_delta_toward_home(
-    pos_rad: f32,
-    target_rad: f32,
-    prefer_shortest_angle: bool,
-    bounded_joint: bool,
-) -> f32 {
-    use std::f32::consts::PI;
-    let linear = linear_error(pos_rad, target_rad);
-    if bounded_joint || !prefer_shortest_angle || linear.abs() <= PI {
-        linear
-    } else {
-        shortest_angle_err(pos_rad, target_rad)
-    }
-}
+pub use safety::{
+    shortest_angle_err,
+    canonical_joint_angle,
+    joint_space_error_mag,
+    motor_cmd_for_joint_target,
+};
 
 /// Minimum linear |error| at which stall / resistance detection may run. Raised to at least
 /// approach handoff (when approach is on) and above `direct_within` so the final homing band
-/// never false-triggers (common ~0.12 rad YAML + ~7° residual from negative-angle homing).
+/// never false-triggers.
 fn effective_stall_min_err(cfg: &StartupRecoveryConfig, direct_within_rad: f32) -> f32 {
     const MARGIN_ABOVE_DIRECT: f32 = 0.02;
     let mut m = cfg.stall_detection_min_linear_error_rad as f32;
@@ -175,6 +54,7 @@ pub struct Motor {
     joint_limits: Option<(f32, f32)>,
     soft_limit_margin_rad: f32,
     last_known_position: Option<f32>,
+    home_rad: f32,
 }
 
 impl Motor {
@@ -186,8 +66,9 @@ impl Motor {
             enabled: false,
             debug: false,
             joint_limits: None,
-            soft_limit_margin_rad: DEFAULT_SOFT_LIMIT_MARGIN_RAD,
+            soft_limit_margin_rad: safety::DEFAULT_SOFT_LIMIT_MARGIN_RAD,
             last_known_position: None,
+            home_rad: 0.0,
         }
     }
 
@@ -218,17 +99,12 @@ impl Motor {
         self.soft_limit_margin_rad = margin_rad.max(0.0);
     }
 
-    /// Scale factor (0.0–1.0) for velocity or torque based on proximity to joint limits.
-    /// Same geometry for both: positive effort pushes toward max, negative toward min.
-    /// Returns 1.0 if no limits are set or the motor is not near a boundary in the
-    /// direction of `signed_effort`.
-    fn soft_limit_effort_scale(&self, signed_effort: f32) -> f32 {
-        soft_limit_effort_scale_pure(
-            self.joint_limits,
-            self.last_known_position,
-            self.soft_limit_margin_rad,
-            signed_effort,
-        )
+    pub fn set_home_rad(&mut self, home_rad: f32) {
+        self.home_rad = home_rad;
+    }
+
+    pub fn home_rad(&self) -> f32 {
+        self.home_rad
     }
 
     // -- Lifecycle --
@@ -262,7 +138,30 @@ impl Motor {
         let (id, data) = cmd.to_can_packet(self.can_id);
         let fb = self.send_and_recv(id, &data).await?;
         self.enabled = false;
-        Ok(Self::parse_feedback(fb))
+        let state = Self::parse_feedback(fb);
+
+        self.auto_normalize_if_multiturn().await;
+
+        Ok(state)
+    }
+
+    /// After disable, if the encoder has accumulated multi-turn offset far from
+    /// the limit range, reset to zero to prevent stale values from poisoning
+    /// subsequent limit checks.
+    async fn auto_normalize_if_multiturn(&mut self) {
+        use std::f32::consts::TAU;
+        if let (Some(pos), Some((lo, hi))) = (self.last_known_position, self.joint_limits) {
+            let range_center = (lo + hi) / 2.0;
+            if (pos - range_center).abs() > TAU {
+                info!(
+                    can_id = self.can_id,
+                    raw_pos = format_args!("{:.3}", pos),
+                    "auto-normalizing multi-turn offset on disable"
+                );
+                let _ = self.set_zero().await;
+                self.last_known_position = Some(0.0);
+            }
+        }
     }
 
     pub async fn clear_faults(&mut self) -> Result<MotorState> {
@@ -285,10 +184,10 @@ impl Motor {
         Ok(())
     }
 
-    /// If the encoder position is more than `threshold_rad` (default: 2π) from `target_rad`,
+    /// If the encoder position is more than `threshold_rad` (default: 2pi) from `target_rad`,
     /// issue a `set_zero` to collapse accumulated multi-turn offset, then return the new
     /// effective position (which will be near 0). The caller should adjust `target_rad`
-    /// accordingly (new target = old target − old position, i.e. the residual after zeroing).
+    /// accordingly (new target = old target - old position, i.e. the residual after zeroing).
     ///
     /// Returns `Some(residual_target)` if normalization happened, `None` if position was fine.
     pub async fn normalize_multiturn(
@@ -306,7 +205,7 @@ impl Motor {
 
         self.set_zero().await?;
 
-        let residual = shortest_angle_err(0.0, target_rad - pos);
+        let residual = safety::shortest_angle_err(0.0, target_rad - pos);
         Ok(Some(residual))
     }
 
@@ -322,13 +221,17 @@ impl Motor {
     ) -> Result<MotorState> {
         self.ensure_enabled().await?;
 
-        let clamped_pos = clamp_cmd_to_limits(position_rad, self.joint_limits);
+        let clamped_pos = safety::clamp_cmd_to_limits(position_rad, self.joint_limits);
 
-        let vel_scale = self.soft_limit_effort_scale(velocity_rads);
+        let vel_scale = safety::soft_limit_effort_scale(
+            self.joint_limits,
+            self.last_known_position,
+            self.home_rad,
+            self.soft_limit_margin_rad,
+            velocity_rads,
+        );
         let clamped_vel = velocity_rads * vel_scale;
 
-        // Pure torque (velocity ~0): scale by limit proximity using torque sign as effort direction.
-        // When both are non-zero, velocity scale also scales torque (prior behavior).
         let clamped_torque = if velocity_rads.abs() > f32::EPSILON {
             if vel_scale < 1.0 && torque_nm.abs() > 0.0 {
                 torque_nm * vel_scale
@@ -336,7 +239,13 @@ impl Motor {
                 torque_nm
             }
         } else {
-            let t_scale = self.soft_limit_effort_scale(torque_nm);
+            let t_scale = safety::soft_limit_effort_scale(
+                self.joint_limits,
+                self.last_known_position,
+                self.home_rad,
+                self.soft_limit_margin_rad,
+                torque_nm,
+            );
             torque_nm * t_scale
         };
 
@@ -381,20 +290,8 @@ impl Motor {
         self.send_control(cmd_pos, 0.0, kp, kd, 0.0).await
     }
 
-    /// If linear `|target − position|` exceeds `large_error_rad`, runs optional **approach** then
-    /// **gradual** steps. Settle and handoff use **linear** error so wrap‑around never pretends the
-    /// joint reached home. Bounded joints (`joint_limits_rad: Some`) always step linearly; otherwise
-    /// shortest arc may apply when linear error `> π` and `prefer_shortest_angle`.
-    /// Commands clamp to limits; when `approach_enabled`, the direct-command band is at least
-    /// `approach_handoff_rad` (so the post-approach error range never uses slow micro-steps). Otherwise
-    /// it is `recovery_direct_command_within_rad`. Inside that band, gradual phase commands home
-    /// directly with the settle ramp (soft → full gains).
-    /// On stall (high torque, low velocity, and linear error not inside the near-goal floor): hold,
-    /// **back off** for `resistance_backoff_ms`, then **continue** with `post_stall_motion_scale`
-    /// applied to steps and gains for the rest of this recovery.
-    ///
-    /// Returns how many stall/backoff cycles ran (0 = no obstruction detected). Callers can use
-    /// this to avoid auto-resuming higher-level motion after a human fought the joint.
+    /// If linear `|target - position|` exceeds `large_error_rad`, runs optional **approach** then
+    /// **gradual** steps. Bounded joints always step linearly.
     pub async fn recover_position_if_far(
         &mut self,
         target_rad: f32,
@@ -406,8 +303,8 @@ impl Motor {
         let bounded_joint = joint_limits_rad.is_some();
         let use_short = cfg.prefer_shortest_angle;
         let initial_far = match joint_limits_rad {
-            Some(lim) => joint_space_error_mag(pos0, target_rad, lim) > large_error_rad,
-            None => linear_error(pos0, target_rad).abs() > large_error_rad,
+            Some(lim) => safety::joint_space_error_mag(pos0, target_rad, lim) > large_error_rad,
+            None => safety::linear_error(pos0, target_rad).abs() > large_error_rad,
         };
         if !initial_far {
             return Ok(0);
@@ -456,8 +353,8 @@ impl Motor {
             while start.elapsed() < timeout && start.elapsed() < approach_limit {
                 let pos = self.read_position().await?;
                 let linear_mag = match joint_limits_rad {
-                    Some(lim) => joint_space_error_mag(pos, target_rad, lim),
-                    None => linear_error(pos, target_rad).abs(),
+                    Some(lim) => safety::joint_space_error_mag(pos, target_rad, lim),
+                    None => safety::linear_error(pos, target_rad).abs(),
                 };
                 if linear_mag + 0.002 < prev_linear_mag {
                     resistance_streak = 0;
@@ -477,15 +374,15 @@ impl Motor {
                 let kd_a = cfg.approach_kd * motion_scale;
 
                 let cmd_pos = if let Some(lim) = joint_limits_rad {
-                    let cj = canonical_joint_angle(pos, target_rad, lim.0, lim.1);
-                    let delta = step_delta_toward_home(cj, target_rad, use_short, true);
+                    let cj = safety::canonical_joint_angle(pos, target_rad, lim.0, lim.1);
+                    let delta = safety::step_delta_toward_home(cj, target_rad, use_short, true);
                     let step = delta.clamp(-a_step, a_step);
                     let cj_next = (cj + step).clamp(lim.0, lim.1);
                     pos + (cj_next - cj)
                 } else {
-                    let delta = step_delta_toward_home(pos, target_rad, use_short, bounded_joint);
+                    let delta = safety::step_delta_toward_home(pos, target_rad, use_short, bounded_joint);
                     let step = delta.clamp(-a_step, a_step);
-                    clamp_cmd_to_limits(pos + step, joint_limits_rad)
+                    safety::clamp_cmd_to_limits(pos + step, joint_limits_rad)
                 };
                 let state = self
                     .send_control(cmd_pos, 0.0, kp_a, kd_a, 0.0)
@@ -521,7 +418,6 @@ impl Motor {
             }
         }
 
-        // Gradual phase should not inherit reduced scale from approach stalls; it uses its own step/gain profile.
         motion_scale = 1.0f32;
 
         let mut resistance_streak = 0u32;
@@ -530,8 +426,8 @@ impl Motor {
         while start.elapsed() < timeout {
             let pos = self.read_position().await?;
             let linear_mag = match joint_limits_rad {
-                Some(lim) => joint_space_error_mag(pos, target_rad, lim),
-                None => linear_error(pos, target_rad).abs(),
+                Some(lim) => safety::joint_space_error_mag(pos, target_rad, lim),
+                None => safety::linear_error(pos, target_rad).abs(),
             };
             if linear_mag + 0.002 < prev_linear_mag {
                 resistance_streak = 0;
@@ -545,27 +441,26 @@ impl Motor {
 
             let in_direct_zone = linear_mag <= direct_within;
             if in_direct_zone {
-                // Full gains for commanding home; post-stall scale would otherwise drag out the last degrees.
                 motion_scale = 1.0;
             }
             let cap = max_step_rad * motion_scale;
             let cmd_pos = if in_direct_zone {
                 match joint_limits_rad {
-                    Some(lim) => motor_cmd_for_joint_target(pos, target_rad, lim),
-                    None => clamp_cmd_to_limits(target_rad, joint_limits_rad),
+                    Some(lim) => safety::motor_cmd_for_joint_target(pos, target_rad, lim),
+                    None => safety::clamp_cmd_to_limits(target_rad, joint_limits_rad),
                 }
             } else {
                 settle_ticks = 0;
                 if let Some(lim) = joint_limits_rad {
-                    let cj = canonical_joint_angle(pos, target_rad, lim.0, lim.1);
-                    let delta = step_delta_toward_home(cj, target_rad, use_short, true);
+                    let cj = safety::canonical_joint_angle(pos, target_rad, lim.0, lim.1);
+                    let delta = safety::step_delta_toward_home(cj, target_rad, use_short, true);
                     let step = delta.clamp(-cap, cap);
                     let cj_next = (cj + step).clamp(lim.0, lim.1);
                     pos + (cj_next - cj)
                 } else {
-                    let delta = step_delta_toward_home(pos, target_rad, use_short, bounded_joint);
+                    let delta = safety::step_delta_toward_home(pos, target_rad, use_short, bounded_joint);
                     let step = delta.clamp(-cap, cap);
-                    clamp_cmd_to_limits(pos + step, joint_limits_rad)
+                    safety::clamp_cmd_to_limits(pos + step, joint_limits_rad)
                 }
             };
 
@@ -629,25 +524,56 @@ impl Motor {
         self.move_to(degrees.to_radians(), kp, kd).await
     }
 
+    /// Velocity-mode spin with joint limit enforcement.
+    ///
+    /// Reads current position, maps it to canonical joint-space, then validates
+    /// the velocity command against limits. Rejects commands that would push
+    /// further out of bounds; scales velocity near boundaries.
     pub async fn spin(&mut self, velocity_rads: f32, kd: Option<f32>) -> Result<MotorState> {
-        self.read_position().await?;
+        let pos = self.read_position().await?;
+
+        let vel = velocity_rads.clamp(-10.0, 10.0);
+        let validated_vel = safety::validate_velocity_command(
+            pos,
+            self.home_rad,
+            self.joint_limits,
+            self.soft_limit_margin_rad,
+            vel,
+        )
+        .map_err(|msg| anyhow::anyhow!("{}", msg))?;
+
         self.send_control(
-            0.0,
-            velocity_rads.clamp(-10.0, 10.0),
+            pos,
+            validated_vel,
             0.0,
             kd.unwrap_or(1.0),
             0.0,
         ).await
     }
 
+    /// Torque-mode command with joint limit enforcement.
+    ///
+    /// Reads current position, maps it to canonical joint-space, then validates
+    /// the torque command against limits.
     pub async fn set_torque(&mut self, torque_nm: f32) -> Result<MotorState> {
-        self.read_position().await?;
+        let pos = self.read_position().await?;
+
+        let trq = torque_nm.clamp(-30.0, 30.0);
+        let validated_trq = safety::validate_torque_command(
+            pos,
+            self.home_rad,
+            self.joint_limits,
+            self.soft_limit_margin_rad,
+            trq,
+        )
+        .map_err(|msg| anyhow::anyhow!("{}", msg))?;
+
         self.send_control(
+            pos,
             0.0,
             0.0,
             0.0,
-            0.0,
-            torque_nm.clamp(-30.0, 30.0),
+            validated_trq,
         ).await
     }
 
@@ -665,8 +591,7 @@ impl Motor {
     }
 
     /// Read motor state via EnableCommand, but validate that the response actually
-    /// comes from this motor's CAN ID. Returns an error on CAN bus response mismatch
-    /// (e.g. when a disconnected motor's slot eats a frame from another motor).
+    /// comes from this motor's CAN ID.
     pub async fn read_state_validated(&mut self) -> Result<MotorState> {
         let cmd = EnableCommand {
             host_id: self.host_id,
@@ -738,9 +663,7 @@ impl Motor {
         self.read_param(RobStride03Parameter::VBus).await
     }
 
-    /// Read the raw fault status register (0x3022). Bits:
-    /// bit14=stall overload, bit7=encoder uncalibrated, bit3=overvoltage,
-    /// bit2=undervoltage, bit1=driver chip fault, bit0=overtemperature.
+    /// Read the raw fault status register (0x3022).
     pub async fn read_fault_code(&mut self) -> Result<u32> {
         let cmd = ReadCommand {
             host_id: self.host_id,
@@ -853,92 +776,7 @@ impl Motor {
     }
 }
 
-#[cfg(test)]
-mod shortest_angle_tests {
-    use super::shortest_angle_err;
-    use std::f32::consts::PI;
-
-    #[test]
-    fn small_delta_unchanged() {
-        assert!((shortest_angle_err(0.5, 1.0) - 0.5).abs() < 1e-5);
-    }
-
-    #[test]
-    fn near_two_pi_wraps_small_positive() {
-        let d = shortest_angle_err(6.1, 0.17);
-        assert!(d > 0.0 && d < 1.0, "d={}", d);
-    }
-
-    #[test]
-    fn near_zero_wraps_small_negative() {
-        let d = shortest_angle_err(0.17, 6.1);
-        assert!(d < 0.0 && d.abs() < 1.0, "d={}", d);
-    }
-
-    #[test]
-    fn half_turn() {
-        assert!((shortest_angle_err(0.0, PI).abs() - PI).abs() < 1e-4);
-    }
-
-    #[test]
-    fn step_delta_uses_linear_when_error_below_pi() {
-        use std::f32::consts::FRAC_PI_2;
-        let d = super::step_delta_toward_home(FRAC_PI_2, 0.0, true, false);
-        assert!((d - (-FRAC_PI_2)).abs() < 1e-5);
-    }
-
-    #[test]
-    fn step_delta_uses_short_wrap_when_linear_huge() {
-        let d = super::step_delta_toward_home(6.1, 0.17, true, false);
-        assert!(d.abs() < 1.0, "expected short arc, got {}", d);
-    }
-
-    #[test]
-    fn step_delta_bounded_joint_always_linear_even_if_huge() {
-        let d = super::step_delta_toward_home(6.1, 0.17, true, true);
-        assert!((d - (0.17 - 6.1)).abs() < 1e-4);
-    }
-}
-
-#[cfg(test)]
-mod canonical_joint_tests {
-    use std::f32::consts::TAU;
-
-    use super::{canonical_joint_angle, joint_space_error_mag, motor_cmd_for_joint_target};
-
-    #[test]
-    fn wrong_2pi_branch_maps_into_limits() {
-        let lo = -1.57_f32;
-        let hi = 3.14_f32;
-        let home = 0.0_f32;
-        let physical = -0.52_f32;
-        let raw = physical + TAU;
-        let cj = canonical_joint_angle(raw, home, lo, hi);
-        assert!(
-            (cj - physical).abs() < 0.06,
-            "expected ~{physical}, got {cj}"
-        );
-        let err = joint_space_error_mag(raw, home, (lo, hi));
-        assert!(
-            (err - physical.abs()).abs() < 0.06,
-            "expected ~30° error, got {err} rad"
-        );
-    }
-
-    #[test]
-    fn motor_cmd_for_home_on_wrong_branch() {
-        let lim = (-1.57_f32, 3.14_f32);
-        let home = 0.0_f32;
-        let raw = -0.52_f32 + TAU;
-        let cmd = motor_cmd_for_joint_target(raw, home, lim);
-        assert!(
-            (cmd - TAU).abs() < 0.2 || cmd.abs() < 0.2,
-            "cmd should be ~0 or ~2π, got {cmd}"
-        );
-    }
-}
-
-/// Recovery / homing guardrails (mirrors logic in `recover_position_if_far` and defaults in `config`).
+/// Recovery / homing guardrails.
 #[cfg(test)]
 mod recovery_homing_tests {
     use crate::config::StartupRecoveryConfig;
@@ -957,7 +795,7 @@ mod recovery_homing_tests {
     #[test]
     fn stall_eligible_gate_matches_recovery() {
         let stall_min = 0.30f32;
-        assert!(!((0.28f32) >= stall_min), "at ~16° error, should not be stall-eligible");
+        assert!(!((0.28f32) >= stall_min), "at ~16 deg error, should not be stall-eligible");
         assert!(0.35f32 >= stall_min);
     }
 
@@ -1006,7 +844,7 @@ mod recovery_homing_tests {
         let residual = 7.3f32.to_radians();
         assert!(
             residual < floor,
-            "~7.3° hang was stall-eligible when floor {:.4} <= err {:.4}; floor is now {:.4}",
+            "~7.3 deg hang was stall-eligible when floor {:.4} <= err {:.4}; floor is now {:.4}",
             0.13f32,
             residual,
             floor
@@ -1034,59 +872,6 @@ mod recovery_homing_tests {
             motion_scale = 1.0;
         }
         assert_eq!(motion_scale, 1.0);
-    }
-}
-
-#[cfg(test)]
-mod soft_limit_effort_tests {
-    use super::soft_limit_effort_scale_pure;
-
-    #[test]
-    fn no_limits_full_scale() {
-        assert_eq!(
-            soft_limit_effort_scale_pure(None, Some(0.5), 0.175, 2.0),
-            1.0
-        );
-    }
-
-    #[test]
-    fn no_position_full_scale() {
-        assert_eq!(
-            soft_limit_effort_scale_pure(Some((-1.0, 1.0)), None, 0.175, 2.0),
-            1.0
-        );
-    }
-
-    #[test]
-    fn positive_effort_ramps_near_max() {
-        let limits = Some((-1.0, 1.0));
-        let m = 0.175f32;
-        let pos = 1.0 - 0.05;
-        let s = soft_limit_effort_scale_pure(limits, Some(pos), m, 1.0);
-        assert!((s - (0.05 / m)).abs() < 1e-5, "s={s}");
-    }
-
-    #[test]
-    fn positive_effort_zero_past_max() {
-        let s = soft_limit_effort_scale_pure(Some((-1.0, 1.0)), Some(1.01), 0.175, 1.0);
-        assert_eq!(s, 0.0);
-    }
-
-    #[test]
-    fn negative_effort_ramps_near_min() {
-        let limits = Some((-1.0, 1.0));
-        let m = 0.175f32;
-        let pos = -1.0 + 0.05;
-        let s = soft_limit_effort_scale_pure(limits, Some(pos), m, -1.0);
-        assert!((s - (0.05 / m)).abs() < 1e-5, "s={s}");
-    }
-
-    #[test]
-    fn zero_effort_returns_full_scale() {
-        assert_eq!(
-            soft_limit_effort_scale_pure(Some((-1.0, 1.0)), Some(0.0), 0.175, 0.0),
-            1.0
-        );
     }
 }
 

@@ -18,6 +18,7 @@ use wtransport::Identity;
 use cortex::arm::Arm;
 use cortex::config::RobotConfig;
 use cortex::motor::{create_protocol, Motor};
+use cortex::safety;
 use navi::log_buffer::LogBuffer;
 use navi::telemetry::{self, TelemetrySnapshot};
 use navi::{self, AppState};
@@ -88,7 +89,14 @@ async fn main() -> Result<()> {
         let all_ids = collect_can_ids(&config);
         for can_id in all_ids {
             info!(can_id, "registering motor");
-            motors.insert(can_id, Motor::new(protocol.clone(), can_id));
+            let mut motor = Motor::new(protocol.clone(), can_id);
+            if let Some((lo, hi)) = safety::limits_for_motor(&config, can_id) {
+                motor.set_joint_limits(lo, hi);
+            }
+            if let Some(home) = safety::home_for_motor(&config, can_id) {
+                motor.set_home_rad(home);
+            }
+            motors.insert(can_id, motor);
         }
         info!("{} motor(s) registered", motors.len());
 

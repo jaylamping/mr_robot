@@ -11,6 +11,7 @@ use tracing::{info, warn};
 
 use cortex::arm::PreflightResult;
 use cortex::motor::Motor;
+use cortex::safety;
 
 use crate::AppState;
 use crate::telemetry::build_joint_name_map;
@@ -747,61 +748,6 @@ async fn set_arm_pose(
     }))
 }
 
-/// When commissioning is off, rejects spin/torque that would push into the soft zone toward a limit.
-fn reject_effort_if_limit_violation(
-    pos_rad: f32,
-    limits: Option<(f32, f32)>,
-    margin_rad: f32,
-    signed_effort: f32,
-) -> Option<String> {
-    const EPS: f32 = 1e-4;
-    const EFFORT_EPS: f32 = 1e-6;
-
-    let (lo, hi) = limits?;
-
-    if signed_effort.abs() < EFFORT_EPS {
-        return None;
-    }
-
-    if pos_rad < lo - EPS || pos_rad > hi + EPS {
-        return Some(format!(
-            "joint position {:.3} rad outside limits [{:.3}, {:.3}] — enable commissioning or move back in range",
-            pos_rad, lo, hi
-        ));
-    }
-
-    if signed_effort > 0.0 {
-        let dist_to_max = hi - pos_rad;
-        if dist_to_max <= EPS {
-            return Some(format!(
-                "effort toward max limit while at or past upper bound (pos {:.3}, max {:.3})",
-                pos_rad, hi
-            ));
-        }
-        if dist_to_max < margin_rad {
-            return Some(format!(
-                "command would push toward max within {:.1}° of limit — enable commissioning to override",
-                margin_rad.to_degrees()
-            ));
-        }
-    } else {
-        let dist_to_min = pos_rad - lo;
-        if dist_to_min <= EPS {
-            return Some(format!(
-                "effort toward min limit while at or past lower bound (pos {:.3}, min {:.3})",
-                pos_rad, lo
-            ));
-        }
-        if dist_to_min < margin_rad {
-            return Some(format!(
-                "command would push toward min within {:.1}° of limit — enable commissioning to override",
-                margin_rad.to_degrees()
-            ));
-        }
-    }
-    None
-}
-
 async fn spin_motor(
     State(state): State<Arc<AppState>>,
     Path(id): Path<u8>,
@@ -810,40 +756,10 @@ async fn spin_motor(
     let mut motors = state.motors.lock().await;
     let motor = motors.get_mut(&id).ok_or(StatusCode::NOT_FOUND)?;
 
-    if !state
-        .commissioning_enabled
-        .load(Ordering::SeqCst)
-    {
-        match motor.read_position().await {
-            Ok(pos) => {
-                let margin = motor.soft_limit_margin_rad();
-                if let Some(msg) = reject_effort_if_limit_violation(
-                    pos,
-                    motor.joint_limits(),
-                    margin,
-                    req.velocity_rads,
-                ) {
-                    return Ok(Json(CommandResponse {
-                        success: false,
-                        error: Some(msg),
-                        angle_rad: Some(pos),
-                        velocity_rads: None,
-                        torque_nm: None,
-                    }));
-                }
-            }
-            Err(e) => {
-                return Ok(Json(CommandResponse {
-                    success: false,
-                    error: Some(format!("Failed to read position: {:#}", e)),
-                    angle_rad: None,
-                    velocity_rads: None,
-                    torque_nm: None,
-                }));
-            }
-        }
-    }
-
+    // Motor::spin() now handles all limit enforcement internally:
+    // reads position, maps to canonical joint-space, validates/scales velocity.
+    // Commissioning mode only skips the API-level soft-margin pre-rejection;
+    // the motor-level hard limits always apply.
     match motor.spin(req.velocity_rads, req.kd).await {
         Ok(ms) => Ok(Json(CommandResponse {
             success: true,
@@ -870,41 +786,7 @@ async fn torque_motor(
     let mut motors = state.motors.lock().await;
     let motor = motors.get_mut(&id).ok_or(StatusCode::NOT_FOUND)?;
 
-    if !state
-        .commissioning_enabled
-        .load(Ordering::SeqCst)
-    {
-        // Positive torque assumed to increase reported joint angle (same sign convention as velocity for limits).
-        match motor.read_position().await {
-            Ok(pos) => {
-                let margin = motor.soft_limit_margin_rad();
-                if let Some(msg) = reject_effort_if_limit_violation(
-                    pos,
-                    motor.joint_limits(),
-                    margin,
-                    req.torque_nm,
-                ) {
-                    return Ok(Json(CommandResponse {
-                        success: false,
-                        error: Some(msg),
-                        angle_rad: Some(pos),
-                        velocity_rads: None,
-                        torque_nm: None,
-                    }));
-                }
-            }
-            Err(e) => {
-                return Ok(Json(CommandResponse {
-                    success: false,
-                    error: Some(format!("Failed to read position: {:#}", e)),
-                    angle_rad: None,
-                    velocity_rads: None,
-                    torque_nm: None,
-                }));
-            }
-        }
-    }
-
+    // Motor::set_torque() now handles all limit enforcement internally.
     match motor.set_torque(req.torque_nm).await {
         Ok(ms) => Ok(Json(CommandResponse {
             success: true,
@@ -931,25 +813,37 @@ async fn jog_motor(
     let mut motors = state.motors.lock().await;
     let motor = motors.get_mut(&id).ok_or(StatusCode::NOT_FOUND)?;
     match motor.read_position().await {
-        Ok(current_rad) => {
-            let target_rad = current_rad + req.delta_deg.to_radians();
+        Ok(raw_pos) => {
+            let canonical = safety::canonical_position_for_limits(
+                raw_pos,
+                motor.home_rad(),
+                motor.joint_limits(),
+            );
+            let target_rad = canonical + req.delta_deg.to_radians();
 
             if let Some(limits) = motor.joint_limits() {
                 if target_rad < limits.0 || target_rad > limits.1 {
                     return Ok(Json(CommandResponse {
                         success: false,
                         error: Some(format!(
-                            "jog target {:.3} rad exceeds limits [{:.3}, {:.3}]",
-                            target_rad, limits.0, limits.1
+                            "jog target {:.3} rad ({:.1} deg) exceeds limits [{:.3}, {:.3}]",
+                            target_rad, target_rad.to_degrees(), limits.0, limits.1
                         )),
-                        angle_rad: Some(current_rad),
+                        angle_rad: Some(canonical),
                         velocity_rads: None,
                         torque_nm: None,
                     }));
                 }
             }
 
-            match motor.move_to(target_rad, req.kp, req.kd).await {
+            // Compute the actual encoder-frame command from the canonical target
+            let cmd_pos = if let Some(limits) = motor.joint_limits() {
+                safety::motor_cmd_for_joint_target(raw_pos, target_rad, limits)
+            } else {
+                target_rad
+            };
+
+            match motor.move_to(cmd_pos, req.kp, req.kd).await {
                 Ok(ms) => Ok(Json(CommandResponse {
                     success: true,
                     error: None,
@@ -1118,7 +1012,16 @@ async fn discover_motors(
             Ok(Ok(_)) => {
                 if !motors.contains_key(&can_id) {
                     info!(can_id, "discover: new motor found");
-                    motors.insert(can_id, Motor::new(protocol.clone(), can_id));
+                    let mut motor = Motor::new(protocol.clone(), can_id);
+                    let config = state.config.read().await;
+                    if let Some((lo, hi)) = safety::limits_for_motor(&config, can_id) {
+                        motor.set_joint_limits(lo, hi);
+                    }
+                    if let Some(home) = safety::home_for_motor(&config, can_id) {
+                        motor.set_home_rad(home);
+                    }
+                    drop(config);
+                    motors.insert(can_id, motor);
                     discovered.push(can_id);
                 }
             }
@@ -1502,12 +1405,11 @@ async fn check_motor_limits(
         return None;
     }
     let config = state.config.read().await;
-    let (_, limits) = find_joint_config(&config, can_id);
-    let (lo, hi) = (limits.0 as f32, limits.1 as f32);
-
-    if lo.abs() > 12.0 && hi.abs() > 12.0 {
-        return None;
-    }
+    let limits = safety::limits_for_motor(&config, can_id);
+    let (lo, hi) = match limits {
+        Some(l) => l,
+        None => return None,
+    };
 
     if pos < lo || pos > hi {
         return Some(CommandResponse {
