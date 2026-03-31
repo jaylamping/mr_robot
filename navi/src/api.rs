@@ -1581,14 +1581,22 @@ fn all_configured_can_ids(config: &cortex::config::RobotConfig) -> Vec<(u8, Stri
     ids
 }
 
+#[derive(Deserialize)]
+struct StartSweepRequest {
+    /// Sweep speed in degrees per second. Defaults to 5. Clamped to 1–30.
+    speed_deg_per_sec: Option<f32>,
+}
+
 /// `POST /api/arms/{side}/joints/{joint}/sweep/start`
 ///
-/// Begins a continuous sweep of the joint between its configured limits at ~5°/sec.
+/// Begins a continuous sweep of the joint between its configured limits.
+/// Optional body: `{ "speed_deg_per_sec": 10.0 }` (default 5, range 1–30).
 /// Returns immediately; the sweep runs in a background task until stopped.
 /// Starting a sweep while one is already active for the same joint cancels the old one.
 async fn start_sweep(
     State(state): State<Arc<AppState>>,
     Path((side, joint)): Path<(String, String)>,
+    body: Option<Json<StartSweepRequest>>,
 ) -> impl IntoResponse {
     let key = format!("{}/{}", side, joint);
 
@@ -1631,9 +1639,13 @@ async fn start_sweep(
         }
     }
 
-    // 5°/step, 1 s/step → ~5°/sec
-    const STEP_RAD: f32 = 0.087;
-    const STEP_DELAY_MS: u64 = 1000;
+    // Fixed update rate; speed is controlled by step size.
+    const STEP_DELAY_MS: u64 = 50;
+    let speed = body
+        .and_then(|b| b.speed_deg_per_sec)
+        .unwrap_or(5.0)
+        .clamp(1.0, 30.0);
+    let step_rad: f32 = speed.to_radians() * (STEP_DELAY_MS as f32 / 1000.0);
 
     let state_clone = state.clone();
     let side_clone = side.clone();
@@ -1641,7 +1653,7 @@ async fn start_sweep(
     let token_clone = token.clone();
 
     tokio::spawn(async move {
-        info!("Sweep started: {}/{}", side_clone, joint_clone);
+        info!("Sweep started: {}/{} at {:.1}°/sec", side_clone, joint_clone, speed);
         loop {
             let cancelled = {
                 let arms = state_clone.arms.lock().await;
@@ -1652,7 +1664,7 @@ async fn start_sweep(
                     }
                     Some(arm) => {
                         match arm
-                            .sweep_joint_once(&joint_clone, STEP_RAD, STEP_DELAY_MS, &token_clone)
+                            .sweep_joint_once(&joint_clone, step_rad, STEP_DELAY_MS, &token_clone)
                             .await
                         {
                             Ok(c) => c,
@@ -1674,7 +1686,7 @@ async fn start_sweep(
             let arms = state_clone.arms.lock().await;
             if let Some(arm) = arms.get(&side_clone) {
                 if let Err(e) = arm
-                    .sweep_joint_home(&joint_clone, STEP_RAD, STEP_DELAY_MS)
+                    .sweep_joint_home(&joint_clone, step_rad, STEP_DELAY_MS)
                     .await
                 {
                     warn!(

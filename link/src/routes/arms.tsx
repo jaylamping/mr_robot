@@ -303,6 +303,7 @@ function JointSlider({
   const [dragging, setDragging] = useState(false);
   const [dragDeg, setDragDeg] = useState<number | null>(null);
   const [sweeping, setSweeping] = useState(false);
+  const [sweepSpeed, setSweepSpeed] = useState(5);
   const limitsMut = useUpdateJointLimitsMutation();
   const homeMut = useUpdateJointHomeMutation();
   const moveMut = useMoveMotorMutation();
@@ -515,7 +516,7 @@ function JointSlider({
   const handleStartSweep = async () => {
     setSweeping(true);
     try {
-      const res = await startSweep(side, joint.name);
+      const res = await startSweep(side, joint.name, sweepSpeed);
       if (!res.success) {
         setSweeping(false);
         toast.error(`Sweep failed for ${formatJointName(joint.name)}`, {
@@ -730,30 +731,51 @@ function JointSlider({
               <h5 className='text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1'>
                 <LuSettings className='size-3' /> Joint Limits
               </h5>
-              {!sweeping ? (
-                <Button
-                  variant='outline'
-                  size='sm'
-                  onClick={handleStartSweep}
-                  disabled={saving || !isOnline}
-                  className='gap-1 h-6 text-[10px] px-2'
-                  title='Continuously sweep joint between limits at ~5°/sec'
-                >
-                  <LuPlay className='size-3' />
-                  Sweep
-                </Button>
-              ) : (
-                <Button
-                  variant='destructive'
-                  size='sm'
-                  onClick={handleStopSweep}
-                  className='gap-1 h-6 text-[10px] px-2'
-                  title='Stop sweep — finishes current pass then returns to home'
-                >
-                  <LuSquare className='size-3' />
-                  Stop
-                </Button>
-              )}
+              <div className='flex items-center gap-1.5'>
+                <div className='flex items-center gap-1'>
+                  <Input
+                    type='number'
+                    value={sweepSpeed}
+                    min={1}
+                    max={30}
+                    step={1}
+                    onChange={(e) => {
+                      const v = Math.round(parseFloat(e.target.value));
+                      if (!isNaN(v)) setSweepSpeed(Math.max(1, Math.min(30, v)));
+                    }}
+                    onBlur={() => {
+                      if (sweeping) handleStartSweep();
+                    }}
+                    className='h-6 w-14 text-[10px] px-1.5 text-center'
+                    title='Sweep speed in °/sec (1–30)'
+                  />
+                  <span className='text-[10px] text-muted-foreground'>°/s</span>
+                </div>
+                {!sweeping ? (
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={handleStartSweep}
+                    disabled={saving || !isOnline}
+                    className='gap-1 h-6 text-[10px] px-2'
+                    title='Continuously sweep joint between limits'
+                  >
+                    <LuPlay className='size-3' />
+                    Sweep
+                  </Button>
+                ) : (
+                  <Button
+                    variant='destructive'
+                    size='sm'
+                    onClick={handleStopSweep}
+                    className='gap-1 h-6 text-[10px] px-2'
+                    title='Stop sweep — finishes current pass then returns to home'
+                  >
+                    <LuSquare className='size-3' />
+                    Stop
+                  </Button>
+                )}
+              </div>
             </div>
             <div className='flex items-center gap-2'>
               <div className='flex-1'>

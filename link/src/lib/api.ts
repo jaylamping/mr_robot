@@ -345,8 +345,12 @@ export function runSequence(name: string): Promise<CommandResponse> {
   return fetchJson(`/sequences/${name}/run`, { method: 'POST' })
 }
 
-export function startSweep(side: string, joint: string): Promise<CommandResponse> {
-  return fetchJson(`/arms/${side}/joints/${joint}/sweep/start`, { method: 'POST' })
+export function startSweep(side: string, joint: string, speedDegPerSec?: number): Promise<CommandResponse> {
+  return fetchJson(`/arms/${side}/joints/${joint}/sweep/start`, {
+    method: 'POST',
+    headers: speedDegPerSec != null ? { 'Content-Type': 'application/json' } : undefined,
+    body: speedDegPerSec != null ? JSON.stringify({ speed_deg_per_sec: speedDegPerSec }) : undefined,
+  })
 }
 
 export function stopSweep(side: string, joint: string): Promise<CommandResponse> {
