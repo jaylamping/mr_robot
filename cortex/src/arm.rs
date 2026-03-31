@@ -740,13 +740,12 @@ pub async fn sweep_pass(
 ) -> Result<bool> {
     let limits = (min, max);
 
-    // Bootstrap: send a gentle hold to get the current raw encoder position.
-    // Use low gains so the motor doesn't jerk if the command position is off.
-    let bootstrap = motor.lock().await.send_control(
-        motor_cmd_for_joint_target(0.0, min, limits),
-        0.0, 5.0, 0.5, 0.0,
-    ).await?;
-    let mut raw = bootstrap.angle_rad;
+    // Read current position first, then send a gentle hold at that position
+    // so the bootstrap command doesn't send the motor somewhere unexpected.
+    let mut raw = motor.lock().await.read_position().await?;
+    let hold_cmd = motor_cmd_for_joint_target(raw, canonical_joint_angle(raw, min, min, max), limits);
+    let state = motor.lock().await.send_control(hold_cmd, 0.0, 5.0, 0.5, 0.0).await?;
+    raw = state.angle_rad;
 
     for &target in &[min, max] {
         loop {
@@ -783,12 +782,11 @@ pub async fn sweep_home(
 ) -> Result<()> {
     let limits = (min, max);
 
-    // Bootstrap current raw position with a gentle hold.
-    let bootstrap = motor.lock().await.send_control(
-        motor_cmd_for_joint_target(0.0, home, limits),
-        0.0, 5.0, 0.5, 0.0,
-    ).await?;
-    let mut raw = bootstrap.angle_rad;
+    // Read current position first, then hold in place while we start stepping.
+    let mut raw = motor.lock().await.read_position().await?;
+    let hold_cmd = motor_cmd_for_joint_target(raw, canonical_joint_angle(raw, home, min, max), limits);
+    let state = motor.lock().await.send_control(hold_cmd, 0.0, 5.0, 0.5, 0.0).await?;
+    raw = state.angle_rad;
 
     loop {
         let canonical = canonical_joint_angle(raw, home, min, max);
