@@ -13,6 +13,7 @@ import {
   useUpdateJointHomeMutation,
   useMoveMotorMutation,
   useZeroMotorMutation,
+  useDisableMotorMutation,
 } from '@/lib/mutations/robot';
 import { useTelemetryStore } from '@/stores/telemetry';
 import { PoseEditor } from '@/components/PoseEditor';
@@ -308,6 +309,11 @@ function JointSlider({
   const homeMut = useUpdateJointHomeMutation();
   const moveMut = useMoveMotorMutation();
   const zeroMut = useZeroMotorMutation();
+  const disableMut = useDisableMotorMutation();
+
+  const [zeroDialogOpen, setZeroDialogOpen] = useState(false);
+  const [zeroDialogMode, setZeroDialogMode] = useState<'zero' | 'zero_and_home'>('zero');
+  const [zeroInProgress, setZeroInProgress] = useState(false);
 
   const minDeg = (joint.limits[0] * 180) / Math.PI;
   const maxDeg = (joint.limits[1] * 180) / Math.PI;
@@ -483,33 +489,65 @@ function JointSlider({
     }
   };
 
-  const handleZeroEncoder = async () => {
+  const openZeroDialog = async (mode: 'zero' | 'zero_and_home') => {
     if (joint.can_id == null) return;
-    if (
-      !confirm(
-        `Zero encoder for ${formatJointName(joint.name)} (CAN ${joint.can_id})?\n\n` +
-          `This redefines the motor's current physical position as 0°. ` +
-          `All position commands and limits are relative to this zero point.\n\n` +
-          `Make sure the joint is at the position you want to be 0°.`,
-      )
-    )
-      return;
-    setSaving(true);
+    setZeroDialogMode(mode);
+    setZeroDialogOpen(true);
     try {
-      const res = await zeroMut.mutateAsync(joint.can_id);
-      if (res.success) {
+      await disableMut.mutateAsync(joint.can_id);
+      toast.info(`${formatJointName(joint.name)} released`, {
+        description: 'Motor disabled — position the joint by hand, then confirm.',
+      });
+    } catch (e) {
+      toast.error('Failed to disable motor', {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
+  const handleZeroDialogConfirm = async () => {
+    if (joint.can_id == null) return;
+    setZeroInProgress(true);
+    try {
+      const zeroRes = await zeroMut.mutateAsync(joint.can_id);
+      if (!zeroRes.success) {
+        toast.error('Zero failed', { description: zeroRes.error });
+        setZeroInProgress(false);
+        return;
+      }
+
+      if (zeroDialogMode === 'zero_and_home') {
+        const homeRes = await homeMut.mutateAsync({
+          section,
+          joint: joint.name,
+          homeRad: 0,
+        });
+        if (homeRes.success) {
+          toast.success(
+            `${formatJointName(joint.name)}: zeroed & home set to 0°`,
+            { description: 'Current physical position is now 0° and saved as home' },
+          );
+        } else {
+          toast.error('Home save failed after zero', { description: homeRes.error });
+        }
+      } else {
         toast.success(`Encoder zeroed for ${formatJointName(joint.name)}`, {
           description: 'Current physical position is now 0°',
         });
-      } else {
-        toast.error('Zero failed', { description: res.error });
       }
     } catch (e) {
       toast.error('Zero encoder failed', {
         description: e instanceof Error ? e.message : String(e),
       });
     } finally {
-      setSaving(false);
+      setZeroInProgress(false);
+      setZeroDialogOpen(false);
+    }
+  };
+
+  const handleZeroDialogClose = (open: boolean) => {
+    if (!open && !zeroInProgress) {
+      setZeroDialogOpen(false);
     }
   };
 
@@ -576,52 +614,8 @@ function JointSlider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sweepSpeed, sweeping, side, joint.name]);
 
-  const handleZeroAndSetHome = async () => {
-    if (joint.can_id == null) return;
-    if (
-      !confirm(
-        `Zero encoder AND set home for ${formatJointName(joint.name)} (CAN ${joint.can_id})?\n\n` +
-          `This will:\n` +
-          `1. Redefine the motor's current physical position as 0°\n` +
-          `2. Save 0° as the home position in robot.yaml\n\n` +
-          `Make sure the joint is at the position you want to be both zero and home.`,
-      )
-    )
-      return;
-    setSaving(true);
-    try {
-      const zeroRes = await zeroMut.mutateAsync(joint.can_id);
-      if (!zeroRes.success) {
-        toast.error('Zero failed', { description: zeroRes.error });
-        setSaving(false);
-        return;
-      }
-      const homeRes = await homeMut.mutateAsync({
-        section,
-        joint: joint.name,
-        homeRad: 0,
-      });
-      if (homeRes.success) {
-        toast.success(
-          `${formatJointName(joint.name)}: zeroed & home set to 0°`,
-          {
-            description:
-              'Current physical position is now 0° and saved as home',
-          },
-        );
-      } else {
-        toast.error('Home save failed after zero', {
-          description: homeRes.error,
-        });
-      }
-    } catch (e) {
-      toast.error('Zero & set home failed', {
-        description: e instanceof Error ? e.message : String(e),
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
+  // Zero & Set Home now uses the same dialog flow as Zero Encoder
+  // — see openZeroDialog('zero_and_home')
 
   return (
     <div className='space-y-1'>
@@ -724,7 +718,7 @@ function JointSlider({
               <Button
                 variant='outline'
                 size='sm'
-                onClick={handleZeroEncoder}
+                onClick={() => openZeroDialog('zero')}
                 disabled={saving || !isOnline}
                 className='gap-1 h-7 text-xs'
                 title="Set the encoder's current position as 0 rad"
@@ -735,7 +729,7 @@ function JointSlider({
               <Button
                 variant='default'
                 size='sm'
-                onClick={handleZeroAndSetHome}
+                onClick={() => openZeroDialog('zero_and_home')}
                 disabled={saving || !isOnline}
                 className='gap-1 h-7 text-xs'
                 title='Zero the encoder AND set home to 0° in one step'
@@ -744,6 +738,68 @@ function JointSlider({
                 Zero & Set Home
               </Button>
             </div>
+
+            <Dialog open={zeroDialogOpen} onOpenChange={handleZeroDialogClose}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>
+                    {zeroDialogMode === 'zero_and_home'
+                      ? `Zero & Set Home — ${formatJointName(joint.name)}`
+                      : `Zero Encoder — ${formatJointName(joint.name)}`}
+                  </DialogTitle>
+                  <DialogDescription>
+                    The motor has been <strong>disabled</strong> so you can freely
+                    position the joint by hand. Move it to the position you want to
+                    define as 0°, then click confirm.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className='space-y-2 text-sm'>
+                  <div className='flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-200'>
+                    <span className='text-lg'>⚠</span>
+                    <span>
+                      The joint is <strong>unpowered</strong> — it may drop under
+                      gravity. Support the arm if needed.
+                    </span>
+                  </div>
+                  {currentDeg != null && (
+                    <p className='text-muted-foreground text-xs'>
+                      Current encoder reading:{' '}
+                      <strong className='text-foreground font-mono'>
+                        {currentDeg.toFixed(1)}°
+                      </strong>
+                      {' '}— this will become 0° after confirmation.
+                    </p>
+                  )}
+                  {zeroDialogMode === 'zero_and_home' && (
+                    <p className='text-muted-foreground text-xs'>
+                      Additionally, 0° will be saved as the home position in{' '}
+                      <code className='text-[10px] bg-muted px-1 py-0.5 rounded'>
+                        robot.yaml
+                      </code>.
+                    </p>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant='outline'
+                    onClick={() => setZeroDialogOpen(false)}
+                    disabled={zeroInProgress}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleZeroDialogConfirm}
+                    disabled={zeroInProgress}
+                  >
+                    {zeroInProgress
+                      ? 'Zeroing...'
+                      : zeroDialogMode === 'zero_and_home'
+                        ? 'Zero & Set Home'
+                        : 'Zero Now'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </div>
 
           <Separator />
